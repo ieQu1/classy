@@ -10,8 +10,8 @@ Business code should not use it directly.
 
 # Logs
 
-Each site `s` maintains a command log `L[s]`.
-When a command (such as `join(site)` or `leave(site)`) is executed on a site,
+Each site `S` maintains a command log `l[S]`.
+When a command (such as `join(S)` or `leave(S)`) is executed on a site,
 it is added to the log.
 
 Sites constantly try to broadcast their logs to known peers.
@@ -19,15 +19,15 @@ Sites constantly try to broadcast their logs to known peers.
 # Logical Clocks
 
 Each site is associated with a Lamport clock.
-Value of the clock of site `a`, as viewed on site `b`, is denoted as `C[a, b]`.
+Value of the clock of site `A`, as viewed on site `B`, is denoted as `c[A, B]`.
 
 Clocks are updated in the following cases:
 
-- `C[a, a]` is incremented when site `a` appends a new command to `L[a]`.
-  Entries in `L[a]` are indexed by `C[a,a]`.
-- `C[a, b]` is incremented when `b` appends a command concerning `a` to `L[b]`.
+- `c[A, A]` is incremented when site `A` appends a new command to `l[A]`.
+  Entries in `l[A]` are indexed by `c[A,A]`.
+- `c[A, B]` is incremented when `B` appends a command concerning `A` to `l[B]`.
   New value of the clock is added to the command body.
-- `C[a, b]` is synced when `b` receives a message from or about `a`.
+- `c[A, B]` is synced when `B` receives a message from or about `A`.
 
 # Event ordering
 
@@ -36,21 +36,25 @@ Provided that each site received all log entries from all peers (in any order),
 it derives peer membership states from the log entries of the maximum order.
 
 More formally,
-let `S[a, b]` be state of site `a` as perceived by `b`,
+let `s[A, B]` be state of site `A` as perceived by `B`,
 and `L` be a concatenation of all logs from all sites,
-then `S[a, b] = maximum(fun event_order/2, filter(concerning_site(b), L))`.
+then `s[A, B] = to_state(maximum(fun(X, Y) -> ord(X) > ord(Y) end, filter(concerning_site(B), L)))`.
 
-If comparison function `event_order/2` is transitive,
+If comparison function is transitive,
+and `ord(X) = ord(Y) → to_state(X) = to_state(Y)`,
 then the above expression returns the same value for every permutation of `L`.
-This module uses lexicographic order of `{C[a, b], M, b}` triples as the event order.
-Lexicographic order is known to be well-behaved.
 
+This module uses lexicographic order of `{c[Target, Origin], Magic, Origin}` triples as the event order.
+It satisfies the above conditions because
+a) lexicographic order is known to behave well.
+b) `{c[Target, Origin], Origin}` pair uniquely identifies `Target` membership state,
+   because Origin always increments its clock after issuing a command about Target.
 
 Note that this total order is *not* causal.
-Practically, it means that cluster will eventually converge to the same state,
+Practically, lack of strict causality means that cluster will eventually converge to the same state,
 but earlier join/leave commands may override later commands.
 
-These adverse side effects can be observed when conflicting commands are issued on different nodes faster than both nodes can sync with each other.
+These adverse side effects can be observed when conflicting commands are issued on different nodes faster than the nodes sync with each other.
 This is most likely to happen during a network partition.
 
 # Log Syncing
@@ -118,9 +122,9 @@ or
 %% internal exports:
 -export([start_link/1, handshake/2]).
 
--export_type([cluster_id/0, site/0, start_args/0, peer_state/0, event_order/0, clock/0]).
+-export_type([start_args/0, op/0, ord/0, clock/0, lentry/0]).
 
--include("classy_backend.hrl").
+-include("classy_rt.hrl").
 
 %%================================================================================
 %% Type declarations
@@ -131,13 +135,9 @@ or
 
 -type start_args() ::
         #{ module  := module()
-         , cluster := cluster_id()
-         , site    := site()
+         , cluster := classy:cluster_id()
+         , site    := classy:site()
          }.
-
--type cluster_id() :: binary().
-
--type site() :: binary().
 
 -type clock() :: non_neg_integer().
 
@@ -150,45 +150,55 @@ Arbitrary term used to break ties between commands with the same logical timesta
 The following command is used to update cluster membership of `target` site.
 """.
 -record(l_set,
-        { from :: site()
-        , target :: site()
-          %% C[target, from]:
+        { %% Site that issued the command.
+          %% This field is necessary for keeping deterministic order
+          %% of commands that peers copy from others' logs
+          origin :: classy:site()
+        , target :: classy:site()
+          %% c[target, origin]:
         , c :: clock()
         , m :: magic()
-        , ttl :: pos_integer()
           %% Is member?
         , mem :: boolean()
         }).
 
 -type op() :: #l_set{}.
 
--type lentry() :: {clock(), op()}.
+-doc """
+Projection of `op()` fields used to establish total order of logs.
+""".
+-type ord() :: {clock(), magic(), classy:site()}.
 
--type event_order() :: {clock(), magic(), site()}.
+-record(lentry,
+        { id :: clock()
+        , ttl :: pos_integer()
+        , payload :: op()
+        }).
 
--opaque peer_state() :: #member_s_v0{}.
+-doc """
+Envelope for the log entries.
+""".
+-type lentry() :: #lentry{}.
 
--type peers() :: #{site() => peer_state()}.
-
--record(call_handshake, {from :: site()}).
+-record(call_handshake, {from :: classy:site()}).
 %% Server periodically sends this message to itself to refresh
 %% connections that went down:
 -record(cast_reconnect, {}).
 
 %% `site' sends a portion of its logs that is newer than `since':
 -record(cast_push,
-        { from :: site()
+        { from :: classy:site()
         , since :: clock()
         , log :: [lentry()]
         }).
 %% Set acked log entry for `site' to `acked':
 -record(cast_ack,
-        { site :: site()
+        { site :: classy:site()
         , acked :: clock()
         }).
 
--record(call_join, {target :: site()}).
--record(call_kick, {target :: site()}).
+-record(call_join, {target :: classy:site()}).
+-record(call_kick, {target :: classy:site()}).
 
 -record(conn,
         { mref :: reference()
@@ -198,59 +208,26 @@ The following command is used to update cluster membership of `target` site.
 
 -record(s,
         { %% Cluster cookie:
-          cluster :: cluster_id()
+          cluster :: classy:cluster_id()
           %% My site id:
-        , site :: site()
+        , site :: classy:site()
           %% Callback module:
         , cbm :: module()
           %% State of the callback module:
-        , cbs :: cbs()
+        , cbs :: classy_rt:cbs()
           %% Log of outgoing commands. Log is stored in reverse
           %% chronological order, with newer entries closer to the
           %% head.
         , log :: [lentry()]
-          %% Collection of peer states derived by merging incoming and
-          %% outgoing the logs:
-        , peers :: peers()
-        , conns = #{} :: #{site() => #conn{}}
+          %% Acked index in the remote log:
+        , acked :: #{classy:site() => clock()}
+          %% Clocks:
+        , clocks :: #{classy:site() => clock()}
+          %% Last entry for each site, used to derive membership state:
+        , last :: #{classy:site() => op()}
+          %% Live p2p connections:
+        , conns = #{} :: #{classy:site() => #conn{}}
         }).
-
-%%================================================================================
-%% Behavior definition:
-%%================================================================================
-
--doc """
-State of the callback module.
-It is opaque to us.
-""".
--type cbs() :: term().
-
--callback classy_init(cluster_id(), site()) -> {ok, cbs()}.
-
--callback classy_terminate(cbs()) -> _.
-
--doc """
-Get PID of a potentially remote `classy_membership` server.
-""".
--callback classy_get_pid(cluster_id(), site()) -> pid() | undefined.
-
--doc """
-Store a key-value pair persistently.
-""".
--callback classy_pset(cbs(), ?cl_log, clock(), op()) -> ok;
-                     (cbs(), ?cl_peer, site(), peer_state()) -> ok.
-
--doc """
-Delete a key-value pair persistently.
-""".
--callback classy_pdel(cbs(), ?cl_log, clock()) -> ok;
-                     (cbs(), ?cl_peer, site()) -> ok.
-
--doc """
-List persistent values.
-""".
--callback classy_plist(cbs(), ?cl_log) -> [lentry()];
-                      (cbs(), ?cl_peer) -> [{site(), peer_state()}].
 
 %%================================================================================
 %% API functions
@@ -265,9 +242,9 @@ it will create a new entry that will eventually make its way to the entire clust
 This fictitious site will exist in `down` state until kicked,
 and even then some records about it may be kept around.
 """.
--spec join(module(), cluster_id(), site(), site()) -> ok | {error, _}.
+-spec join(module(), classy:cluster_id(), classy:site(), classy:site()) -> ok | {error, _}.
 join(CBM, Cluster, Local, Target) ->
-  case cbm_get_pid(CBM, Cluster, Local) of
+  case classy_rt:get_membership_pid(CBM, Cluster, Local) of
     Pid when is_pid(Pid) ->
       try
         gen_server:call(Pid, #call_join{target = Target})
@@ -284,9 +261,9 @@ Low-level call that sets `Target`'s membership state to `false`.
 Note: kicking the site doesn't erase information about it.
 Nodes will keep and propagate a record saying that target site is not part of the cluster.
 """.
--spec kick(module(), cluster_id(), site(), site()) -> ok.
+-spec kick(module(), classy:cluster_id(), classy:site(), classy:site()) -> ok.
 kick(CBM, Cluster, Local, Target) ->
-  case cbm_get_pid(CBM, Cluster, Local) of
+  case classy_rt:get_membership_pid(CBM, Cluster, Local) of
     Pid when is_pid(Pid) ->
       try
         gen_server:call(Pid, #call_kick{target = Target})
@@ -297,7 +274,7 @@ kick(CBM, Cluster, Local, Target) ->
       {error, noproc}
   end.
 
--spec members(cluster_id(), site()) -> [site()].
+-spec members(classy:cluster_id(), classy:site()) -> [classy:site()].
 members(Cluster, Local) ->
   error(todo).
 
@@ -309,7 +286,7 @@ members(Cluster, Local) ->
 start_link(Args = #{module := CBM, cluster := _, site := _}) when is_atom(CBM) ->
   gen_server:start_link(?MODULE, Args, []).
 
--spec handshake(pid(), site()) -> {ok, cluster_id(), site(), clock()} | {error, _}.
+-spec handshake(pid(), classy:site()) -> {ok, classy:cluster_id(), classy:site(), clock()} | {error, _}.
 handshake(Pid, Local) ->
   try
     gen_server:call(Pid, #call_handshake{from = Local})
@@ -325,14 +302,15 @@ handshake(Pid, Local) ->
 -spec init(start_args()) -> {ok, #s{}}.
 init(#{module := CBM, cluster := Cluster, site := Site}) ->
   process_flag(trap_exit, true),
-  {ok, CBS} = cbm_init(CBM, Cluster, Site),
-  Peers = restore_peers(CBM, CBS),
+  {ok, CBS} = classy_rt:init(CBM, Cluster, Site),
   S = #s{ cluster = Cluster
         , site = Site
         , cbm = CBM
         , cbs = CBS
         , log = restore_log(CBM, CBS)
-        , peers = Peers
+        , acked = restore_acked(CBM, CBS)
+        , last = restore_last(CBM, CBS)
+        , clocks = restore_clocks(CBM, CBS)
         },
   {ok, reconnect(S)}.
 
@@ -375,45 +353,150 @@ handle_info(_Info, S) ->
   {noreply, S}.
 
 terminate(_Reason, #s{cbm = CBM, cbs = CBS}) ->
-  cbm_terminate(CBM, CBS).
+  classy_rt:terminate(CBM, CBS).
 
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+-spec ord(op()) -> ord().
+ord(#l_set{c = C, m = M, origin = O}) ->
+  {C, M, O}.
+
+-spec state(op()) -> boolean().
+state(#l_set{mem = Mem}) ->
+  Mem.
+
+-spec apply_entries(classy:site(), [lentry()], #s{}) -> {clock(), #s{}}.
+apply_entries(From, Log, S0) ->
+  Acked = get_acked(From, S0),
+  lists:foldl(
+    fun(Lentry, {_, Acc}) ->
+        {Lentry#lentry.id, apply_entry(From, Lentry, Acc)}
+    end,
+    {Acked, S0},
+    Log).
+
+-spec apply_entry(classy:site(), lentry(), #s{}) -> #s{}.
+apply_entry(
+  From,
+  Lentry = #lentry{ttl = TTL, payload = Op},
+  S0 = #s{site = Local, last = Last0}
+) ->
+  #l_set{target = Target} = Op,
+  case Last0 of
+    #{Target := Op0} ->
+      case ord(Op) > ord(Op0) of
+        true ->
+          Updated = true,
+          Last = Last0#{Target := Op};
+        false ->
+          Updated = false,
+          Last = Last0
+      end;
+    #{} ->
+      Updated = true,
+      Last = Last0#{Target => Op}
+  end,
+  S1 = S0#s{last = Last},
+  S = sync_clocks(From, Lentry, S1),
+  if Updated andalso From =/= Local andalso TTL > 1 ->
+      log_write(Op, TTL - 1, S);
+     true ->
+      S
+  end.
+
+%%--------------------------------------------------------------------------------
+%% Logical clocks
+%%--------------------------------------------------------------------------------
+
+-spec sync_clocks(classy:site(), lentry(), #s{}) -> #s{}.
+sync_clocks(From, #lentry{id = Cf, payload = Op}, S0) ->
+  S = sync_clock(From, Cf, S0),
+  case Op of
+    #l_set{target = Target, c = Ct} ->
+      sync_clock(Target, Ct, S)
+  end.
+
+-spec inc_get_clock(classy:site(), #s{}) -> {clock(), #s{}}.
+inc_get_clock(Site, S0 = #s{clocks = Clocks}) ->
+  T = maps:get(Site, Clocks, 0) + 1,
+  S = S0#s{clocks = Clocks#{Site => T}},
+  {T, S}.
+
+-spec sync_clock(classy:site(), clock(), #s{}) -> #s{}.
+sync_clock(Site, T1, S = #s{clocks = Clocks}) ->
+  T0 = maps:get(Site, Clocks, 0),
+  T = max(T0, T1),
+  S#s{clocks = Clocks#{Site => T}}.
+
+%%--------------------------------------------------------------------------------
+%% Log manipulations
+%%--------------------------------------------------------------------------------
 
 -doc """
 Transform a cluster management command into a log entry,
 append it to the local log,
 and then broadcast it to the connected peers.
 """.
--spec create_and_append(join | kick, site(), #s{}) -> #s{}.
+-spec create_and_append(join | kick, classy:site(), #s{}) -> #s{}.
 create_and_append(Command, Target, S0 = #s{site = Local}) ->
   {C, S} = inc_get_clock(Target, S0),
-  Op = #l_set{ from = Local
+  Op = #l_set{ origin = Local
              , target = Target
              , c = C
-             , ttl = ?ttl
              , mem = case Command of
                        join -> true;
                        kick -> false
                      end
              },
-  log_write(Op, S).
+  log_write(Op, ?ttl, S).
 
--spec log_write(op(), #s{}) -> #s{}.
-log_write(Op, S0 = #s{site = Local}) ->
+-spec log_write(op(), pos_integer(), #s{}) -> #s{}.
+log_write(Op, TTL, S0 = #s{site = Local}) ->
   {Idx, S1} = inc_get_clock(Local, S0),
-  Lentry = {Idx, Op},
+  Lentry = #lentry{ id = Idx
+                  , ttl = TTL
+                  , payload = Op
+                  },
   S2 = lcons(Lentry, S1),
   S = apply_entry(Local, Lentry, S2),
   sync(false, S),
   S.
 
 -doc """
+Copy entries newer than `Acked` from the log.
+
+Note: this function assumes that the input log is in reverse order,
+but it returns items in the chronological order.
+""".
+-spec copy_log(clock(), [lentry()]) -> [lentry()].
+copy_log(Acked, Log) ->
+  copy_log(Acked, Log, []).
+
+-spec copy_log(clock(), [lentry()], [lentry()]) -> [lentry()].
+copy_log(Acked, [E | Rest], Acc) when E#lentry.id > Acked ->
+  copy_log(Acked, Rest, [E | Acc]);
+copy_log(_, _, Acc) ->
+  Acc.
+
+-spec lcons(lentry(), #s{}) -> #s{}.
+lcons(
+  Lentry = #lentry{id = Idx},
+  S = #s{cbm = CBM, cbs = CBS, log = Log}
+) ->
+  ok = classy_rt:pset(CBM, CBS, ?cl_log, Idx, Lentry),
+  S#s{log = [Lentry | Log]}.
+
+%%--------------------------------------------------------------------------------
+%% Functions related to the p2p protocol
+%%--------------------------------------------------------------------------------
+
+-doc """
 Try to establish connections to all known but disconnected sites.
 """.
 -spec reconnect(#s{}) -> #s{}.
-reconnect(S0 = #s{peers = Peers, site = Local, conns = Conns}) ->
+reconnect(S0 = #s{last = Peers, site = Local, conns = Conns}) ->
   Disconnected = maps:keys(Peers) -- [Local | maps:keys(Conns)],
   %% TODO: these calls may be slow due to timeouts. Connect async-ly.
   S = lists:foldl(
@@ -425,7 +508,7 @@ reconnect(S0 = #s{peers = Peers, site = Local, conns = Conns}) ->
   erlang:send_after(?reconnect_time, self(), #cast_reconnect{}),
   S.
 
--spec handle_push(site(), clock(), [lentry()], #s{}) -> #s{}.
+-spec handle_push(classy:site(), clock(), [lentry()], #s{}) -> #s{}.
 handle_push(From, Since, Log, S0) ->
   Acked0 = get_acked(From, S0),
   if Acked0 >= Since ->
@@ -439,7 +522,7 @@ handle_push(From, Since, Log, S0) ->
 -doc """
 Mark `Clock` as acked for `Site` and send notification to `Site`.
 """.
--spec ack(site(), clock(), #s{}) -> #s{}.
+-spec ack(classy:site(), clock(), #s{}) -> #s{}.
 ack(Site, Clock, S = #s{site = Local, conns = Conns}) ->
   case Conns of
     #{Site := #conn{pid = Pid}} ->
@@ -449,7 +532,7 @@ ack(Site, Clock, S = #s{site = Local, conns = Conns}) ->
   end,
   set_acked(Site, Clock, S).
 
--spec handle_ack(site(), clock(), #s{}) -> #s{}.
+-spec handle_ack(classy:site(), clock(), #s{}) -> #s{}.
 handle_ack(Site, Acked, S0 = #s{conns = Conns0}) ->
   case Conns0 of
     #{Site := Conn0} ->
@@ -461,9 +544,9 @@ handle_ack(Site, Acked, S0 = #s{conns = Conns0}) ->
       S0
   end.
 
--spec do_reconnect(site(), #s{}) -> #s{}.
+-spec do_reconnect(classy:site(), #s{}) -> #s{}.
 do_reconnect(Site, S = #s{cluster = Cluster, site = Local, cbm = CBM, conns = Conns0}) ->
-  case cbm_get_pid(CBM, Cluster, Site) of
+  case classy_rt:get_membership_pid(CBM, Cluster, Site) of
     undefined ->
       S;
     Pid when is_pid(Pid) ->
@@ -482,7 +565,7 @@ do_reconnect(Site, S = #s{cluster = Cluster, site = Local, cbm = CBM, conns = Co
       end
   end.
 
--spec sync(boolean(), site(), #s{}) -> #s{}.
+-spec sync(boolean(), classy:site(), #s{}) -> #s{}.
 sync(SkipEmpty, Site, S = #s{site = Local, conns = Conns, log = Log}) ->
   case Conns of
     #{Site := #conn{pid = Pid, acked = Acked}} ->
@@ -509,108 +592,15 @@ sync(SkipEmpty, S = #s{conns = Conns}) ->
     S,
     Conns).
 
--spec apply_entries(site(), [lentry()], #s{}) -> {clock(), #s{}}.
-apply_entries(From, Log, S0) ->
-  Acked = get_acked(From, S0),
-  lists:foldl(
-    fun(Lentry = {Idx, _}, {_, Acc}) ->
-        {Idx, apply_entry(From, Lentry, Acc)}
-    end,
-    {Acked, S0},
-    Log).
+-spec get_acked(classy:site(), #s{}) -> clock().
+get_acked(Site, #s{acked = Acked}) ->
+  maps:get(Site, Acked, 0).
 
--spec apply_entry(site(), lentry(), #s{}) -> #s{}.
-apply_entry(From, {Idx, Op}, S0 = #s{peers = Peers0}) ->
-  {Updated, Peers} = update_peer(Op, Peers0),
-  S = S0#s{peers = Peers},
-  sync_clock(From, Idx, S).
+-spec set_acked(classy:site(), clock(), #s{}) -> #s{}.
+set_acked(Site, Clock, S = #s{acked = Acked}) ->
+  S#s{acked = Acked#{Site => Clock}}.
 
--spec update_peer(op(), peers()) -> {boolean(), peers()}.
-update_peer(Op, Peers) ->
-  #l_set{ from = From
-        , target = S
-        , c = C
-        , m = Magic
-        , mem = Mem
-        } = Op,
-  Ord = {C, Magic, From},
-  case Peers of
-    #{S := PS0} ->
-      #member_s_v0{ord = Ord0, ts = C0} = PS0,
-      case Ord0 < Ord of
-        true ->
-          PS = PS0#member_s_v0{ ord = Ord
-                              , mem = Mem
-                              , ts = max(C0, C)
-                              },
-          {true, Peers#{S := PS}};
-        false ->
-          {false, Peers}
-      end;
-    #{} ->
-      PS = #member_s_v0{ord = Ord, mem = Mem, ts = C},
-      {true, Peers#{S => PS}}
-  end.
-
--spec inc_get_clock(site(), #s{}) -> {clock(), #s{}}.
-inc_get_clock(Site, S0 = #s{peers = Peers0}) ->
-  PS0 = maps:get(Site, Peers0, #member_s_v0{}),
-  TS = PS0#member_s_v0.ts + 1,
-  PS = PS0#member_s_v0{ts = TS},
-  Peers = Peers0#{Site => PS},
-  S = S0#s{peers = Peers},
-  {TS, S}.
-
--spec sync_clock(site(), clock(), #s{}) -> #s{}.
-sync_clock(Site, TS1, S = #s{peers = Peers0}) ->
-  PS0 = maps:get(Site, Peers0, #member_s_v0{}),
-  TS = max(PS0#member_s_v0.ts, TS1),
-  PS = PS0#member_s_v0{ts = TS},
-  Peers = Peers0#{Site => PS},
-  S#s{peers = Peers}.
-
--doc """
-Copy entries newer than `Acked` from the log.
-
-Note: this function assumes that the input log is in reverse order,
-but it returns items in the chronological order.
-""".
--spec copy_log(clock(), [lentry()]) -> [lentry()].
-copy_log(Acked, Log) ->
-  copy_log(Acked, Log, []).
-
--spec copy_log(clock(), [lentry()], [lentry()]) -> [lentry()].
-copy_log(Acked, [E = {Clock, _} | Rest], Acc) when Clock > Acked ->
-  copy_log(Acked, Rest, [E | Acc]);
-copy_log(_, _, Acc) ->
-  Acc.
-
--spec get_acked(site(), #s{}) -> clock().
-get_acked(Site, #s{peers = Peers}) ->
-  case Peers of
-    #{Site := #member_s_v0{ii = C}} ->
-      C;
-    #{} ->
-      0
-  end.
-
--spec set_acked(site(), clock(), #s{}) -> #s{}.
-set_acked(Site, Clock, S = #s{peers = Peers0}) ->
-  case Peers0 of
-    #{Site := PS0} ->
-      PS = PS0#member_s_v0{ii = Clock},
-      Peers = Peers0#{Site := PS},
-      S#s{peers = Peers};
-    #{} ->
-      S
-  end.
-
--spec lcons(lentry(), #s{}) -> #s{}.
-lcons(Lentry = {Idx, Op}, S = #s{cbm = CBM, cbs = CBS, log = Log}) ->
-  ok = cbm_pset(CBM, CBS, ?cl_log, Idx, Op),
-  S#s{log = [Lentry | Log]}.
-
--spec site_of_conn(reference(), #s{}) -> {ok, site()} | undefined.
+-spec site_of_conn(reference(), #s{}) -> {ok, classy:site()} | undefined.
 site_of_conn(Ref, #s{conns = Conns}) ->
   try
     maps:foreach(
@@ -624,42 +614,26 @@ site_of_conn(Ref, #s{conns = Conns}) ->
       {ok, Site}
   end.
 
--spec restore_log(module(), cbs()) -> [lentry()].
+%%--------------------------------------------------------------------------------
+%% Persistent state save/restore
+%%--------------------------------------------------------------------------------
+
+-spec restore_log(module(), classy_rt:cbs()) -> [lentry()].
 restore_log(CBM, CBS) ->
-  L = cbm_plist(CBM, CBS, ?cl_log),
+  L = classy_rt:plist(CBM, CBS, ?cl_log),
   %% We need reverse chronological order:
   lists:sort(
     fun(A, B) -> B =< A end,
     L).
 
--spec restore_peers(module(), cbs()) -> #{site() => peer_state()}.
-restore_peers(CBM, CBS) ->
-  maps:from_list(cbm_plist(CBM, CBS, ?cl_peer)).
+-spec restore_last(module(), classy_rt:cbs()) -> #{classy:site() => op()}.
+restore_last(CBM, CBS) ->
+  maps:from_list(classy_rt:plist(CBM, CBS, ?cl_last)).
 
--spec cbm_init(module(), cluster_id(), site()) -> {ok, cbs()}.
-cbm_init(Mod, Cluster, Site) ->
-  Mod:classy_init(Cluster, Site).
+-spec restore_clocks(module(), classy_rt:cbs()) -> #{classy:site() => clock()}.
+restore_clocks(CBM, CBS) ->
+  maps:from_list(classy_rt:plist(CBM, CBS, ?cl_clock)).
 
--spec cbm_terminate(module(), cbs()) -> ok.
-cbm_terminate(Mod, CBS) ->
-  Mod:classy_terminate(CBS),
-  ok.
-
--spec cbm_get_pid(module(), cluster_id(), site()) -> pid() | undefined.
-cbm_get_pid(Mod, Cluster, Site) ->
-  Mod:classy_get_pid(Cluster, Site).
-
--spec cbm_pset(module(), cbs(), ?cl_log, clock(), op()) -> ok;
-              (module(), cbs(), ?cl_peer, site(), peer_state()) -> ok.
-cbm_pset(Mod, CBS, Kind, K, V) ->
-  Mod:classy_pset(CBS, Kind, K, V).
-
--spec cbm_pdel(module(), cbs(), ?cl_log, clock()) -> ok;
-              (module(), cbs(), ?cl_peer, site()) -> ok.
-cbm_pdel(Mod, CBS, Kind, K) ->
-  Mod:classy_pdel(CBS, Kind, K).
-
--spec cbm_plist(module(), cbs(), ?cl_log) -> [lentry()];
-               (module(), cbs(), ?cl_peer) -> [{site(), peer_state()}].
-cbm_plist(Mod, CBS, Kind) ->
-  Mod:classy_plist(CBS, Kind).
+-spec restore_acked(module(), classy_rt:cbs()) -> #{classy:site() => clock()}.
+restore_acked(CBM, CBS) ->
+  maps:from_list(classy_rt:plist(CBM, CBS, ?cl_acked)).
