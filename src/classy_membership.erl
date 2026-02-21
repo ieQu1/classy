@@ -147,13 +147,20 @@ Arbitrary term used to break ties between commands with the same logical timesta
 -type magic() :: term().
 
 -doc """
-The following two commands are used to update cluster membership of `site`.
+The following command is used to update cluster membership of `target` site.
 """.
--record(l_join, {site :: site(), c :: clock(), m :: magic(), ttl :: pos_integer()}).
--record(l_kick, {site :: site(), c :: clock(), m :: magic(), ttl :: pos_integer()}).
+-record(l_set,
+        { from :: site()
+        , target :: site()
+          %% C[target, from]:
+        , c :: clock()
+        , m :: magic()
+        , ttl :: pos_integer()
+          %% Is member?
+        , mem :: boolean()
+        }).
 
--type op() :: #l_join{}
-            | #l_kick{}.
+-type op() :: #l_set{}.
 
 -type lentry() :: {clock(), op()}.
 
@@ -380,12 +387,17 @@ append it to the local log,
 and then broadcast it to the connected peers.
 """.
 -spec create_and_append(join | kick, site(), #s{}) -> #s{}.
-create_and_append(Command, Target, S0) ->
+create_and_append(Command, Target, S0 = #s{site = Local}) ->
   {C, S} = inc_get_clock(Target, S0),
-  Op = case Command of
-         join -> #l_join{site = Target, c = C, ttl = ?ttl};
-         kick -> #l_kick{site = Target, c = C, ttl = ?ttl}
-       end,
+  Op = #l_set{ from = Local
+             , target = Target
+             , c = C
+             , ttl = ?ttl
+             , mem = case Command of
+                       join -> true;
+                       kick -> false
+                     end
+             },
   log_write(Op, S).
 
 -spec log_write(op(), #s{}) -> #s{}.
@@ -509,18 +521,18 @@ apply_entries(From, Log, S0) ->
 
 -spec apply_entry(site(), lentry(), #s{}) -> #s{}.
 apply_entry(From, {Idx, Op}, S0 = #s{peers = Peers0}) ->
-  {Updated, Peers} = update_peer(From, Op, Peers0),
+  {Updated, Peers} = update_peer(Op, Peers0),
   S = S0#s{peers = Peers},
   sync_clock(From, Idx, S).
 
--spec update_peer(site(), op(), peers()) -> {boolean(), peers()}.
-update_peer(From, Op, Peers) ->
-  case Op of
-    #l_join{c = C, site = S, m = Magic} ->
-      Mem = true;
-    #l_kick{c = C, site = S, m = Magic} ->
-      Mem = false
-  end,
+-spec update_peer(op(), peers()) -> {boolean(), peers()}.
+update_peer(Op, Peers) ->
+  #l_set{ from = From
+        , target = S
+        , c = C
+        , m = Magic
+        , mem = Mem
+        } = Op,
   Ord = {C, Magic, From},
   case Peers of
     #{S := PS0} ->
