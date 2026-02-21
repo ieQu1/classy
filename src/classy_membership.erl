@@ -120,7 +120,7 @@ or
 
 -export_type([cluster_id/0, site/0, start_args/0, peer_state/0, event_order/0, clock/0]).
 
--include("classy.hrl").
+-include("classy_backend.hrl").
 
 %%================================================================================
 %% Type declarations
@@ -230,20 +230,20 @@ Get PID of a potentially remote `classy_membership` server.
 -doc """
 Store a key-value pair persistently.
 """.
--callback classy_pset(cbs(), log, clock(), op()) -> ok;
-                     (cbs(), peer, site(), peer_state()) -> ok.
+-callback classy_pset(cbs(), ?cl_log, clock(), op()) -> ok;
+                     (cbs(), ?cl_peer, site(), peer_state()) -> ok.
 
 -doc """
 Delete a key-value pair persistently.
 """.
--callback classy_pdel(cbs(), log, clock()) -> ok;
-                     (cbs(), peer, site()) -> ok.
+-callback classy_pdel(cbs(), ?cl_log, clock()) -> ok;
+                     (cbs(), ?cl_peer, site()) -> ok.
 
 -doc """
 List persistent values.
 """.
--callback classy_plist(cbs(), log) -> [lentry()];
-                      (cbs(), peer) -> [{site(), peer_state()}].
+-callback classy_plist(cbs(), ?cl_log) -> [lentry()];
+                      (cbs(), ?cl_peer) -> [{site(), peer_state()}].
 
 %%================================================================================
 %% API functions
@@ -595,7 +595,7 @@ set_acked(Site, Clock, S = #s{peers = Peers0}) ->
 
 -spec lcons(lentry(), #s{}) -> #s{}.
 lcons(Lentry = {Idx, Op}, S = #s{cbm = CBM, cbs = CBS, log = Log}) ->
-  ok = cbm_pset(CBM, CBS, log, Idx, Op),
+  ok = cbm_pset(CBM, CBS, ?cl_log, Idx, Op),
   S#s{log = [Lentry | Log]}.
 
 -spec site_of_conn(reference(), #s{}) -> {ok, site()} | undefined.
@@ -614,7 +614,7 @@ site_of_conn(Ref, #s{conns = Conns}) ->
 
 -spec restore_log(module(), cbs()) -> [lentry()].
 restore_log(CBM, CBS) ->
-  L = cbm_plist(CBM, CBS, log),
+  L = cbm_plist(CBM, CBS, ?cl_log),
   %% We need reverse chronological order:
   lists:sort(
     fun(A, B) -> B =< A end,
@@ -622,7 +622,7 @@ restore_log(CBM, CBS) ->
 
 -spec restore_peers(module(), cbs()) -> #{site() => peer_state()}.
 restore_peers(CBM, CBS) ->
-  maps:from_list(cbm_plist(CBM, CBS, peer)).
+  maps:from_list(cbm_plist(CBM, CBS, ?cl_peer)).
 
 -spec cbm_init(module(), cluster_id(), site()) -> {ok, cbs()}.
 cbm_init(Mod, Cluster, Site) ->
@@ -637,17 +637,17 @@ cbm_terminate(Mod, CBS) ->
 cbm_get_pid(Mod, Cluster, Site) ->
   Mod:classy_get_pid(Cluster, Site).
 
--spec cbm_pset(module(), cbs(), log, clock(), op()) -> ok;
-              (module(), cbs(), peer, site(), peer_state()) -> ok.
+-spec cbm_pset(module(), cbs(), ?cl_log, clock(), op()) -> ok;
+              (module(), cbs(), ?cl_peer, site(), peer_state()) -> ok.
 cbm_pset(Mod, CBS, Kind, K, V) ->
   Mod:classy_pset(CBS, Kind, K, V).
 
--spec cbm_pdel(module(), cbs(), log, clock()) -> ok;
-              (module(), cbs(), peer, site()) -> ok.
+-spec cbm_pdel(module(), cbs(), ?cl_log, clock()) -> ok;
+              (module(), cbs(), ?cl_peer, site()) -> ok.
 cbm_pdel(Mod, CBS, Kind, K) ->
   Mod:classy_pdel(CBS, Kind, K).
 
--spec cbm_plist(module(), cbs(), log) -> [lentry()];
-               (module(), cbs(), peer) -> [{site(), peer_state()}].
+-spec cbm_plist(module(), cbs(), ?cl_log) -> [lentry()];
+               (module(), cbs(), ?cl_peer) -> [{site(), peer_state()}].
 cbm_plist(Mod, CBS, Kind) ->
   Mod:classy_plist(CBS, Kind).

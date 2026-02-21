@@ -1,8 +1,13 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2025-2026 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 -ifndef(CLASSY_HRL).
 -define(CLASSY_HRL, true).
+
+-define(cl_log, cl_log).
+-define(cl_peer, cl_peer).
+
+%% This header contains definitions for modules implementing `classy' behavior.
 
 %% Peer membership status.
 %%
