@@ -3,15 +3,57 @@
 %%--------------------------------------------------------------------
 -module(classy_membership).
 -moduledoc """
-# Logical clock
+# Cluster Membership CRDT
 
-Logical clock for site S is synced in three cases:
+This module provides low-level API for maintaining and updating cluster membership information.
+Business code should not use it directly.
 
-- S appends a new command to its log.
-- Site S' receives a message from the S.
-- Site S' appends a command concerning S to its log.
+# Logs
 
-# Syncing
+Each site `s` maintains a command log `L[s]`.
+When a command (such as `join(site)` or `leave(site)`) is executed on a site,
+it is added to the log.
+
+Sites constantly try to broadcast their logs to known peers.
+
+# Logical Clocks
+
+Each site is associated with a Lamport clock.
+Value of the clock of site `a`, as viewed on site `b`, is denoted as `C[a, b]`.
+
+Clocks are updated in the following cases:
+
+- `C[a, a]` is incremented when site `a` appends a new command to `L[a]`.
+  Entries in `L[a]` are indexed by `C[a,a]`.
+- `C[a, b]` is incremented when `b` appends a command concerning `a` to `L[b]`.
+  New value of the clock is added to the command body.
+- `C[a, b]` is synced when `b` receives a message from or about `a`.
+
+# Event ordering
+
+Eventual consistency is assured by the existence of a total order of log entries.
+Provided that each site received all log entries from all peers (in any order),
+it derives peer membership states from the log entries of the maximum order.
+
+More formally,
+let `S[a, b]` be state of site `a` as perceived by `b`,
+and `L` be a concatenation of all logs from all sites,
+then `S[a, b] = maximum(fun event_order/2, filter(concerning_site(b), L))`.
+
+If comparison function `event_order/2` is transitive,
+then the above expression returns the same value for every permutation of `L`.
+This module uses lexicographic order of `{C[a, b], M, b}` triples as the event order.
+Lexicographic order is known to be well-behaved.
+
+
+Note that this total order is *not* causal.
+Practically, it means that cluster will eventually converge to the same state,
+but earlier join/leave commands may override later commands.
+
+These adverse side effects can be observed when conflicting commands are issued on different nodes faster than both nodes can sync with each other.
+This is most likely to happen during a network partition.
+
+# Log Syncing
 
 Typical scenario:
 
@@ -100,36 +142,12 @@ or
 -type clock() :: non_neg_integer().
 
 -doc """
-Arbitrary term used to tie-break comparisons with the same clock.
+Arbitrary term used to break ties between commands with the same logical timestamp.
 """.
 -type magic() :: term().
 
 -doc """
-The following two commands are used to update cluster membership.
-
-Let `X` be a site issuing the command (by appending it to its log),
-and `Y` be value of `site' field in the command.
-Such command means site X is trying to update status of Y.
-
-Multiple sites can issue conflicting commands.
-Total order of events is established by lexicographic comparison of triples
-`{LamportClock, Magic, X}`,
-where `LamportClock` is value of `c` field in the command,
-and `Magic` is value of field `m` in the command used to break the ties.
-Since Lamport clocks do not establish strict causal order,
-this order is total, but *isn't* causal.
-
-Practically, it means that cluster will eventually converge to the same state,
-but earlier join/leave commands can override later commands.
-
-These adverse side effects can be observed in two cases:
-
-- When conflicting commands are issued by different sites at the same time,
-  faster than the peers can sync up.
-
-- When conflicting commands are issued on different sites during a network partition.
-  Note that `Magic` *may* help to resolve the conflict in a sensible way,
-  but it's not guaranteed to, if both partition repeat the commands.
+The following two commands are used to update cluster membership of `site`.
 """.
 -record(l_join, {site :: site(), c :: clock(), m :: magic(), ttl :: pos_integer()}).
 -record(l_kick, {site :: site(), c :: clock(), m :: magic(), ttl :: pos_integer()}).
@@ -216,7 +234,7 @@ Store a key-value pair persistently.
                      (cbs(), peer, site(), peer_state()) -> ok.
 
 -doc """
-Delete a key persistently.
+Delete a key-value pair persistently.
 """.
 -callback classy_pdel(cbs(), log, clock()) -> ok;
                      (cbs(), peer, site()) -> ok.
@@ -318,10 +336,10 @@ handle_call(#call_handshake{from = From}, _From, S) ->
   Reply = {ok, Cluster, Local, get_acked(From, S)},
   {reply, Reply, S};
 handle_call(#call_join{target = Target}, _From, S0) ->
-  S = add_local_command(join, Target, S0),
+  S = create_and_append(join, Target, S0),
   {reply, ok, S};
 handle_call(#call_kick{target = Target}, _From, S0) ->
-  S = add_local_command(kick, Target, S0),
+  S = create_and_append(kick, Target, S0),
   {reply, ok, S};
 handle_call(_Call, _From, S) ->
   {reply, {error, unknown_call}, S}.
@@ -356,16 +374,26 @@ terminate(_Reason, #s{cbm = CBM, cbs = CBS}) ->
 %% Internal functions
 %%================================================================================
 
--spec add_local_command(join | kick, site(), #s{}) -> #s{}.
-add_local_command(Command, Target, S0 = #s{site = Local}) ->
+-doc """
+Transform a cluster management command into a log entry,
+append it to the local log,
+and then broadcast it to the connected peers.
+""".
+-spec create_and_append(join | kick, site(), #s{}) -> #s{}.
+create_and_append(Command, Target, S0) ->
+  {C, S} = inc_get_clock(Target, S0),
+  Op = case Command of
+         join -> #l_join{site = Target, c = C, ttl = ?ttl};
+         kick -> #l_kick{site = Target, c = C, ttl = ?ttl}
+       end,
+  log_write(Op, S).
+
+-spec log_write(op(), #s{}) -> #s{}.
+log_write(Op, S0 = #s{site = Local}) ->
   {Idx, S1} = inc_get_clock(Local, S0),
-  {C, S2} = inc_get_clock(Target, S1),
-  Lentry = case Command of
-             join -> {Idx, #l_join{site = Target, c = C, ttl = ?ttl}};
-             kick -> {Idx, #l_kick{site = Target, c = C, ttl = ?ttl}}
-           end,
-  S3 = lcons(Lentry, S2),
-  S = apply_entry(Local, Lentry, S3),
+  Lentry = {Idx, Op},
+  S2 = lcons(Lentry, S1),
+  S = apply_entry(Local, Lentry, S2),
   sync(false, S),
   S.
 
@@ -481,7 +509,7 @@ apply_entries(From, Log, S0) ->
 
 -spec apply_entry(site(), lentry(), #s{}) -> #s{}.
 apply_entry(From, {Idx, Op}, S0 = #s{peers = Peers0}) ->
-  {_Updated, Peers} = update_peer(From, Op, Peers0),
+  {Updated, Peers} = update_peer(From, Op, Peers0),
   S = S0#s{peers = Peers},
   sync_clock(From, Idx, S).
 
