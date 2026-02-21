@@ -407,30 +407,6 @@ apply_entry(
   end.
 
 %%--------------------------------------------------------------------------------
-%% Logical clocks
-%%--------------------------------------------------------------------------------
-
--spec sync_clocks(classy:site(), lentry(), #s{}) -> #s{}.
-sync_clocks(From, #lentry{id = Cf, payload = Op}, S0) ->
-  S = sync_clock(From, Cf, S0),
-  case Op of
-    #l_set{target = Target, c = Ct} ->
-      sync_clock(Target, Ct, S)
-  end.
-
--spec inc_get_clock(classy:site(), #s{}) -> {clock(), #s{}}.
-inc_get_clock(Site, S0 = #s{clocks = Clocks}) ->
-  T = maps:get(Site, Clocks, 0) + 1,
-  S = S0#s{clocks = Clocks#{Site => T}},
-  {T, S}.
-
--spec sync_clock(classy:site(), clock(), #s{}) -> #s{}.
-sync_clock(Site, T1, S = #s{clocks = Clocks}) ->
-  T0 = maps:get(Site, Clocks, 0),
-  T = max(T0, T1),
-  S#s{clocks = Clocks#{Site => T}}.
-
-%%--------------------------------------------------------------------------------
 %% Log manipulations
 %%--------------------------------------------------------------------------------
 
@@ -487,6 +463,28 @@ lcons(
 ) ->
   ok = classy_rt:pset(CBM, CBS, ?cl_log, Idx, Lentry),
   S#s{log = [Lentry | Log]}.
+
+%%--------------------------------------------------------------------------------
+%% Logical clocks
+%%--------------------------------------------------------------------------------
+
+-spec sync_clocks(classy:site(), lentry(), #s{}) -> #s{}.
+sync_clocks(From, #lentry{id = Cf, payload = Op}, S0) ->
+  S = sync_clock(From, Cf, S0),
+  #l_set{target = Target, c = Ct} = Op,
+  sync_clock(Target, Ct, S).
+
+-spec inc_get_clock(classy:site(), #s{}) -> {clock(), #s{}}.
+inc_get_clock(Site, S0 = #s{clocks = Clocks}) ->
+  T = maps:get(Site, Clocks, 0) + 1,
+  S = S0#s{clocks = Clocks#{Site => T}},
+  {T, S}.
+
+-spec sync_clock(classy:site(), clock(), #s{}) -> #s{}.
+sync_clock(Site, T1, S = #s{clocks = Clocks}) ->
+  T0 = maps:get(Site, Clocks, 0),
+  T = max(T0, T1),
+  S#s{clocks = Clocks#{Site => T}}.
 
 %%--------------------------------------------------------------------------------
 %% Functions related to the p2p protocol
