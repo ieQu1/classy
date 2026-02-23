@@ -120,9 +120,9 @@ or
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([start_link/1, handshake/2]).
+-export([create_tables/0, delete_tables/0, start_link/1]).
 
--export_type([start_args/0, op/0, ord/0, clock/0, lentry/0]).
+-export_type([start_args/0, op/0, ord/0, clock/0, mementry/0]).
 
 -include("classy_rt.hrl").
 
@@ -130,8 +130,7 @@ or
 %% Type declarations
 %%================================================================================
 
--define(reconnect_time, 1_000).
--define(ttl, 5).
+-define(default_sync_timeout, 100).
 
 -type start_args() ::
         #{ module  := module()
@@ -147,86 +146,76 @@ Arbitrary term used to break ties between commands with the same logical timesta
 -type magic() :: term().
 
 -doc """
-The following command is used to update cluster membership of `target` site.
+The following command is used to set membership state of `target` site.
 """.
--record(l_set,
-        { %% Site that issued the command.
-          %% This field is necessary for keeping deterministic order
-          %% of commands that peers copy from others' logs
+-record(op_set,
+        { %% Site that issued the command:
           origin :: classy:site()
+          %% Site which is being updated:
         , target :: classy:site()
           %% c[target, origin]:
         , c :: clock()
+          %% This term can be used to break ties:
         , m :: magic()
           %% Is member?
         , mem :: boolean()
+          %% Origin's wall time when the update was made. This value
+          %% isn't used by this module directly, but it gives hint to
+          %% the autoclean:
+        , owt :: integer()
         }).
 
--type op() :: #l_set{}.
+-type op() :: #op_set{}.
 
 -doc """
 Projection of `op()` fields used to establish total order of logs.
 """.
 -type ord() :: {clock(), magic(), classy:site()}.
 
--record(lentry,
-        { id :: clock()
-        , ttl :: pos_integer()
-        , payload :: op()
-        }).
-
--doc """
-Envelope for the log entries.
-""".
--type lentry() :: #lentry{}.
-
--record(call_handshake, {from :: classy:site()}).
-%% Server periodically sends this message to itself to refresh
-%% connections that went down:
--record(cast_reconnect, {}).
-
 %% `site' sends a portion of its logs that is newer than `since':
--record(cast_push,
+-record(cast_sync,
         { from :: classy:site()
         , since :: clock()
-        , log :: [lentry()]
-        }).
-%% Set acked log entry for `site' to `acked':
--record(cast_ack,
-        { site :: classy:site()
         , acked :: clock()
+          %% c[from, from]
+        , c :: clock()
+        , data :: [op()]
         }).
+
+-doc "Timeout message triggering syncing out state.".
+-record(to_sync_out, {}).
 
 -record(call_join, {target :: classy:site()}).
 -record(call_kick, {target :: classy:site()}).
 
--record(conn,
-        { mref :: reference()
-        , pid :: pid()
-        , acked :: clock()
-        }).
+%% Type of data stored in ets:
+-record(memtable, {k, op, mem, tou}).
+-define(memtable, ?MODULE).
+-type mementry() ::
+        #memtable{ k :: {classy:cluster_id(), _Local :: classy:site(), _Target :: classy:site()}
+                 , op :: op()
+                   %% State, immeditely derived from `op':
+                 , mem :: boolean()
+                   %% Local logical time of the last update to the entry:
+                 , tou :: clock()
+                 }.
 
 -record(s,
-        { %% Cluster cookie:
+        { %% Cluster ID:
           cluster :: classy:cluster_id()
-          %% My site id:
+          %% Local site id:
         , site :: classy:site()
-          %% Callback module:
+          %% Runtime callback module:
         , cbm :: module()
-          %% State of the callback module:
+          %% State of the runtime CBM:
         , cbs :: classy_rt:cbs()
-          %% Log of outgoing commands. Log is stored in reverse
-          %% chronological order, with newer entries closer to the
-          %% head.
-        , log :: [lentry()]
-          %% Acked index in the remote log:
-        , acked :: #{classy:site() => clock()}
-          %% Clocks:
-        , clocks :: #{classy:site() => clock()}
-          %% Last entry for each site, used to derive membership state:
-        , last :: #{classy:site() => op()}
-          %% Live p2p connections:
-        , conns = #{} :: #{classy:site() => #conn{}}
+        , sync_timer :: undefined | reference()
+          %% Clock of the last successful sync *from* site:
+        , acked_in :: #{classy:site() => clock()}
+          %% Clock of the last successful sync *to* site:
+        , acked_out :: #{classy:site() => clock()}
+          %% Logical clock:
+        , clock :: clock()
         }).
 
 %%================================================================================
@@ -259,7 +248,7 @@ join(CBM, Cluster, Local, Target) ->
 Low-level call that sets `Target`'s membership state to `false`.
 
 Note: kicking the site doesn't erase information about it.
-Nodes will keep and propagate a record saying that target site is not part of the cluster.
+Nodes will continue to propagate a record saying that target site is not part of the cluster.
 """.
 -spec kick(module(), classy:cluster_id(), classy:site(), classy:site()) -> ok.
 kick(CBM, Cluster, Local, Target) ->
@@ -274,26 +263,39 @@ kick(CBM, Cluster, Local, Target) ->
       {error, noproc}
   end.
 
+-doc """
+Return active members of the `Cluster`,
+as perceived by `Local` site.
+
+WARNING: if `Local` is not a member of the returned list,
+then the local system may be permanently out of sync with the `Cluster` or `{Cluster,Local}` server may be inactive.
+In both cases the result value can't be trusted.
+""".
 -spec members(classy:cluster_id(), classy:site()) -> [classy:site()].
 members(Cluster, Local) ->
-  error(todo).
+  MS = {#memtable{k = {Cluster, Local, '$1'}, mem = true, _ = '_'}, [], ['$1']},
+  ets:select(?memtable, [MS]).
 
 %%================================================================================
 %% Internal exports
 %%================================================================================
 
+-doc """
+This function should be called by the supervisor before starting any instances of this server.
+""".
+-spec create_tables() -> ok.
+create_tables() ->
+  ets:new(?memtable, [named_table, public, {keypos, #memtable.k}]),
+  ok.
+
+-spec delete_tables() -> ok.
+delete_tables() ->
+  ets:delete(?memtable),
+  ok.
+
 -spec start_link(start_args()) -> {ok, pid()}.
 start_link(Args = #{module := CBM, cluster := _, site := _}) when is_atom(CBM) ->
   gen_server:start_link(?MODULE, Args, []).
-
--spec handshake(pid(), classy:site()) -> {ok, classy:cluster_id(), classy:site(), clock()} | {error, _}.
-handshake(Pid, Local) ->
-  try
-    gen_server:call(Pid, #call_handshake{from = Local})
-  catch
-    EC:Err ->
-      {error, {EC, Err}}
-  end.
 
 %%================================================================================
 %% behavior callbacks
@@ -307,52 +309,39 @@ init(#{module := CBM, cluster := Cluster, site := Site}) ->
         , site = Site
         , cbm = CBM
         , cbs = CBS
-        , log = restore_log(CBM, CBS)
-        , acked = restore_acked(CBM, CBS)
-        , last = restore_last(CBM, CBS)
-        , clocks = restore_clocks(CBM, CBS)
+        , acked_in = restore_acked_in(CBM, CBS)
+        , acked_out = restore_acked_out(CBM, CBS)
+        , clock = restore_clock(CBM, CBS)
         },
-  {ok, reconnect(S)}.
+  memtab_restore(S),
+  {ok, need_sync(0, S)}.
 
-handle_call(#call_handshake{from = From}, _From, S) ->
-  #s{ cluster = Cluster
-    , site = Local
-    } = S,
-  Reply = {ok, Cluster, Local, get_acked(From, S)},
-  {reply, Reply, S};
 handle_call(#call_join{target = Target}, _From, S0) ->
-  S = create_and_append(join, Target, S0),
+  S = local_command(join, Target, S0),
   {reply, ok, S};
 handle_call(#call_kick{target = Target}, _From, S0) ->
-  S = create_and_append(kick, Target, S0),
+  S = local_command(kick, Target, S0),
   {reply, ok, S};
 handle_call(_Call, _From, S) ->
   {reply, {error, unknown_call}, S}.
 
-handle_cast(#cast_reconnect{}, S) ->
-  {noreply, reconnect(S)};
-handle_cast(#cast_ack{site = Site, acked = Acked}, S) ->
-  {noreply, handle_ack(Site, Acked, S)};
-handle_cast(#cast_push{from = From, since = Since, log = Log}, S) ->
-  {noreply, handle_push(From, Since, Log, S)};
+handle_cast(#cast_sync{} = Req, S) ->
+  {noreply, handle_sync_in(Req, S)};
 handle_cast(_Cast, S) ->
   {noreply, S}.
 
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
-handle_info({'DOWN', MRef, _Type, _Obj, _Reason}, S0 = #s{conns = Conns0}) ->
-  case site_of_conn(MRef, S0) of
-    {ok, Site} ->
-      Conns = maps:remove(Site, Conns0),
-      S = S0#s{conns = Conns},
-      {noreply, do_reconnect(Site, S)};
-    undefined ->
-      {noreply, S0}
-  end;
+handle_info(#to_sync_out{}, S0 = #s{cbm = CBM, cbs = CBS}) ->
+  S = S0#s{sync_timer = undefined},
+  ok = classy_rt:pflush(CBM, CBS),
+  {noreply, handle_sync_out(S)};
 handle_info(_Info, S) ->
   {noreply, S}.
 
-terminate(_Reason, #s{cbm = CBM, cbs = CBS}) ->
+terminate(_Reason, S = #s{cbm = CBM, cbs = CBS}) ->
+  memtab_clean(S),
+  ok = classy_rt:pflush(CBM, CBS),
   classy_rt:terminate(CBM, CBS).
 
 %%================================================================================
@@ -360,278 +349,235 @@ terminate(_Reason, #s{cbm = CBM, cbs = CBS}) ->
 %%================================================================================
 
 -spec ord(op()) -> ord().
-ord(#l_set{c = C, m = M, origin = O}) ->
+ord(#op_set{c = C, m = M, origin = O}) ->
   {C, M, O}.
 
 -spec state(op()) -> boolean().
-state(#l_set{mem = Mem}) ->
+state(#op_set{mem = Mem}) ->
   Mem.
 
--spec apply_entries(classy:site(), [lentry()], #s{}) -> {clock(), #s{}}.
-apply_entries(From, Log, S0) ->
-  Acked = get_acked(From, S0),
-  lists:foldl(
-    fun(Lentry, {_, Acc}) ->
-        {Lentry#lentry.id, apply_entry(From, Lentry, Acc)}
-    end,
-    {Acked, S0},
-    Log).
+-spec local_command(join | kick, classy:site(), #s{}) -> #s{}.
+local_command(Cmd, Target, S0 = #s{cbm = CBM, site = Local}) ->
+  {C, S} = inc_get_clock(S0),
+  Op = #op_set{ origin = Local
+              , target = Target
+              , c = C
+              , mem = case Cmd of
+                        join -> true;
+                        kick -> false
+                      end
+              , owt = classy_rt:time_s(CBM)
+              },
+  _ = merge(C, Op, S),
+  need_sync(S).
 
--spec apply_entry(classy:site(), lentry(), #s{}) -> #s{}.
-apply_entry(
-  From,
-  Lentry = #lentry{ttl = TTL, payload = Op},
-  S0 = #s{site = Local, last = Last0}
-) ->
-  #l_set{target = Target} = Op,
-  case Last0 of
-    #{Target := Op0} ->
+-spec handle_sync_in(#cast_sync{}, #s{}) -> #s{}.
+handle_sync_in(Req, S0) ->
+  #cast_sync{ from = From
+            , since = Since
+            , c = Cf
+            , acked = AckedOut
+            , data = Data
+            } = Req,
+  case get_acked_in(From, S0) >= Since of
+    true ->
+      {Cl, S} = inc_get_clock(sync_clock(Cf, S0)),
+      lists:foreach(
+        fun(Op) -> merge(Cl, Op, S) end,
+        Data),
+      need_sync(
+        set_acked_in(
+          From, Cf,
+          set_acked_out(From, AckedOut, S)));
+     false ->
+      %% Gap in sequence. Ignore this message. Peer will be notified
+      %% about the expected acked value during the next sync-out:
+      need_sync(S0)
+  end.
+
+-spec handle_sync_out(#s{}) -> #s{}.
+handle_sync_out(S = #s{cbm = CBM, cluster = Cluster, site = Local, clock = C}) ->
+  lists:foreach(
+    fun(Site) ->
+        case classy_rt:get_membership_pid(CBM, Cluster, Site) of
+          Pid when is_pid(Pid) ->
+            Since = get_acked_out(Site, S),
+            Data = memtab_since(Since, S),
+            gen_server:cast(
+              Pid,
+              #cast_sync{ from = Local
+                        , since = Since
+                        , acked = get_acked_in(Site, S)
+                        , c = C
+                        , data = Data
+                        });
+          undefined ->
+            ok
+        end
+    end,
+    peers(S)),
+  S.
+
+-spec merge(clock(), op(), #s{}) -> boolean().
+merge(LTime, Op, S) ->
+  #op_set{target = Site} = Op,
+  case memtab_lookup(Site, S) of
+    {ok, Op0} ->
       case ord(Op) > ord(Op0) of
         true ->
-          Updated = true,
-          Last = Last0#{Target := Op};
+          set_last(LTime, Op, S),
+          true;
         false ->
-          Updated = false,
-          Last = Last0
+          false
       end;
-    #{} ->
-      Updated = true,
-      Last = Last0#{Target => Op}
-  end,
-  S1 = S0#s{last = Last},
-  S = sync_clocks(From, Lentry, S1),
-  if Updated andalso From =/= Local andalso TTL > 1 ->
-      log_write(Op, TTL - 1, S);
-     true ->
-      S
+    undefined ->
+      set_last(LTime, Op, S),
+      true
   end.
 
 %%--------------------------------------------------------------------------------
-%% Log manipulations
+%% Interface for site state storage
 %%--------------------------------------------------------------------------------
 
 -doc """
-Transform a cluster management command into a log entry,
-append it to the local log,
-and then broadcast it to the connected peers.
+Apply operation to the persistent state and memtable.
 """.
--spec create_and_append(join | kick, classy:site(), #s{}) -> #s{}.
-create_and_append(Command, Target, S0 = #s{site = Local}) ->
-  {C, S} = inc_get_clock(Target, S0),
-  Op = #l_set{ origin = Local
-             , target = Target
-             , c = C
-             , mem = case Command of
-                       join -> true;
-                       kick -> false
-                     end
-             },
-  log_write(Op, ?ttl, S).
+-spec set_last(clock(), op(), #s{}) -> #s{}.
+set_last(LTime, Op, S = #s{cbm = CBM, cbs = CBS}) ->
+  #op_set{target = Target} = Op,
+  ok = classy_rt:pset(CBM, CBS, {?cl_last, Target}, Op),
+  memtab_set(LTime, Op, S).
 
--spec log_write(op(), pos_integer(), #s{}) -> #s{}.
-log_write(Op, TTL, S0 = #s{site = Local}) ->
-  {Idx, S1} = inc_get_clock(Local, S0),
-  Lentry = #lentry{ id = Idx
-                  , ttl = TTL
-                  , payload = Op
-                  },
-  S2 = lcons(Lentry, S1),
-  S = apply_entry(Local, Lentry, S2),
-  sync(false, S),
+-spec memtab_lookup(classy:site(), #s{}) -> {ok, op()} | undefined.
+memtab_lookup(Site, #s{cluster = Cluster, site = Local}) ->
+  case ets:lookup(?memtable, {Cluster, Local, Site}) of
+    [#memtable{op = Op}] ->
+      {ok, Op};
+    [] ->
+      undefined
+  end.
+
+-spec memtab_since(clock(), #s{}) -> [op()].
+memtab_since(Since, #s{cluster = Cluster, site = Local}) ->
+  MS = { #memtable{ k = {Cluster, Local, '_'}
+                  , op = '$1'
+                  , tou = '$2'
+                  , _ = '_'
+                  }
+       , [{'>=', '$2', Since}]
+       , ['$1']
+       },
+  ets:select(?memtable, [MS]).
+
+-spec memtab_restore(#s{}) -> ok.
+memtab_restore(S = #s{cbm = CBM, cbs = CBS, clock = Cl}) ->
+  memtab_clean(S),
+  L = classy_rt:plist(CBM, CBS, ?cl_last),
+  lists:foreach(
+    fun({_Target, Op}) ->
+        memtab_set(Cl, Op, S)
+    end,
+    L).
+
+-spec memtab_set(clock(), op(), #s{}) -> #s{}.
+memtab_set(LTime, Op, S = #s{cluster = Cluster, site = Local}) ->
+  #op_set{target = Target} = Op,
+  MemEntry = #memtable{ k = {Cluster, Local, Target}
+                      , op = Op
+                      , tou = LTime
+                      , mem = state(Op)
+                      },
+  ets:insert(?memtable, MemEntry),
   S.
 
--doc """
-Copy entries newer than `Acked` from the log.
+-spec memtab_clean(#s{}) -> ok.
+memtab_clean(#s{cluster = Cluster, site = Local}) ->
+  ets:match_delete(?memtable, #memtable{k = {Cluster, Local, '_'}, _ = '_'}),
+  ok.
 
-Note: this function assumes that the input log is in reverse order,
-but it returns items in the chronological order.
-""".
--spec copy_log(clock(), [lentry()]) -> [lentry()].
-copy_log(Acked, Log) ->
-  copy_log(Acked, Log, []).
-
--spec copy_log(clock(), [lentry()], [lentry()]) -> [lentry()].
-copy_log(Acked, [E | Rest], Acc) when E#lentry.id > Acked ->
-  copy_log(Acked, Rest, [E | Acc]);
-copy_log(_, _, Acc) ->
-  Acc.
-
--spec lcons(lentry(), #s{}) -> #s{}.
-lcons(
-  Lentry = #lentry{id = Idx},
-  S = #s{cbm = CBM, cbs = CBS, log = Log}
-) ->
-  ok = classy_rt:pset(CBM, CBS, ?cl_log, Idx, Lentry),
-  S#s{log = [Lentry | Log]}.
+-spec peers(#s{}) -> [classy:site()].
+peers(#s{cluster = Cluster, site = Local}) ->
+  MS = {#memtable{k = {Cluster, Local, '$1'}, _ = '_'}, [], ['$1']},
+  ets:select(?memtable, [MS]).
 
 %%--------------------------------------------------------------------------------
 %% Logical clocks
 %%--------------------------------------------------------------------------------
 
--spec sync_clocks(classy:site(), lentry(), #s{}) -> #s{}.
-sync_clocks(From, #lentry{id = Cf, payload = Op}, S0) ->
-  S = sync_clock(From, Cf, S0),
-  #l_set{target = Target, c = Ct} = Op,
-  sync_clock(Target, Ct, S).
+-spec inc_get_clock(#s{}) -> {clock(), #s{}}.
+inc_get_clock(S0 = #s{clock = C0}) ->
+  C = C0 + 1,
+  S = S0#s{clock = C},
+  psave_clock(S),
+  {C, S}.
 
--spec inc_get_clock(classy:site(), #s{}) -> {clock(), #s{}}.
-inc_get_clock(Site, S0 = #s{clocks = Clocks}) ->
-  T = maps:get(Site, Clocks, 0) + 1,
-  S = S0#s{clocks = Clocks#{Site => T}},
-  {T, S}.
+-spec sync_clock(clock(), #s{}) -> #s{}.
+sync_clock(T1, S0 = #s{clock = T0}) ->
+  S = S0#s{clock = max(T0, T1)},
+  psave_clock(S),
+  S.
 
--spec sync_clock(classy:site(), clock(), #s{}) -> #s{}.
-sync_clock(Site, T1, S = #s{clocks = Clocks}) ->
-  T0 = maps:get(Site, Clocks, 0),
-  T = max(T0, T1),
-  S#s{clocks = Clocks#{Site => T}}.
+-spec restore_clock(module(), classy_rt:cbs()) -> clock().
+restore_clock(CBM, CBS) ->
+  case classy_rt:plist(CBM, CBS, ?cl_clock) of
+    [C] when is_integer(C) -> C;
+    [] -> 0
+  end.
+
+-spec psave_clock(#s{}) -> ok.
+psave_clock(#s{cbm = CBM, cbs = CBS, clock = C}) ->
+  classy_rt:pset(CBM, CBS, ?cl_clock, C).
 
 %%--------------------------------------------------------------------------------
 %% Functions related to the p2p protocol
 %%--------------------------------------------------------------------------------
 
 -doc """
-Try to establish connections to all known but disconnected sites.
+Schedule sync with the peers after the default timeout.
 """.
--spec reconnect(#s{}) -> #s{}.
-reconnect(S0 = #s{last = Peers, site = Local, conns = Conns}) ->
-  Disconnected = maps:keys(Peers) -- [Local | maps:keys(Conns)],
-  %% TODO: these calls may be slow due to timeouts. Connect async-ly.
-  S = lists:foldl(
-        fun(Site, Acc) ->
-            do_reconnect(Site, Acc)
-        end,
-        S0,
-        Disconnected),
-  erlang:send_after(?reconnect_time, self(), #cast_reconnect{}),
-  S.
-
--spec handle_push(classy:site(), clock(), [lentry()], #s{}) -> #s{}.
-handle_push(From, Since, Log, S0) ->
-  Acked0 = get_acked(From, S0),
-  if Acked0 >= Since ->
-      {Acked, S} = apply_entries(From, Log, S0),
-      ack(From, Acked, S);
-     true ->
-      %% Gap in the log. Ignore this message and notify the remote:
-      ack(From, Acked0, S0)
-  end.
+-spec need_sync(#s{}) -> #s{}.
+need_sync(S) ->
+  need_sync(
+    application:get_env(classy, sync_timeout, ?default_sync_timeout),
+    S).
 
 -doc """
-Mark `Clock` as acked for `Site` and send notification to `Site`.
+Schedule sync with the peers after a specified timeout.
+This call has no effect if the sync is already scheduled.
 """.
--spec ack(classy:site(), clock(), #s{}) -> #s{}.
-ack(Site, Clock, S = #s{site = Local, conns = Conns}) ->
-  case Conns of
-    #{Site := #conn{pid = Pid}} ->
-      gen_server:cast(Pid, #cast_ack{site = Local, acked = Clock});
-    #{} ->
-      ok
-  end,
-  set_acked(Site, Clock, S).
+-spec need_sync(non_neg_integer(), #s{}) -> #s{}.
+need_sync(_Timeout, S = #s{sync_timer = R}) when is_reference(R) ->
+  S;
+need_sync(Timeout, S = #s{sync_timer = undefined}) ->
+  TRef = erlang:send_after(Timeout, self(), #to_sync_out{}),
+  S#s{sync_timer = TRef}.
 
--spec handle_ack(classy:site(), clock(), #s{}) -> #s{}.
-handle_ack(Site, Acked, S0 = #s{conns = Conns0}) ->
-  case Conns0 of
-    #{Site := Conn0} ->
-      Conn = Conn0#conn{acked = Acked},
-      Conns = Conns0#{Site := Conn},
-      S = S0#s{conns = Conns},
-      sync(true, Site, S);
-    #{} ->
-      S0
-  end.
+-spec get_acked_in(classy:site(), #s{}) -> clock().
+get_acked_in(Site, #s{acked_in = A}) ->
+  maps:get(Site, A, 0).
 
--spec do_reconnect(classy:site(), #s{}) -> #s{}.
-do_reconnect(Site, S = #s{cluster = Cluster, site = Local, cbm = CBM, conns = Conns0}) ->
-  case classy_rt:get_membership_pid(CBM, Cluster, Site) of
-    undefined ->
-      S;
-    Pid when is_pid(Pid) ->
-      MRef = monitor(process, Pid),
-      case handshake(Pid, Local) of
-        {ok, Cluster, Site, Acked} ->
-          Conn = #conn{ mref = MRef
-                      , pid = Pid
-                      , acked = Acked
-                      },
-          Conns = Conns0#{Site => Conn},
-          sync(false, Site, S#s{conns = Conns});
-        _ ->
-          demonitor(MRef),
-          S
-      end
-  end.
+-spec get_acked_out(classy:site(), #s{}) -> clock().
+get_acked_out(Site, #s{acked_out = A}) ->
+  maps:get(Site, A, 0).
 
--spec sync(boolean(), classy:site(), #s{}) -> #s{}.
-sync(SkipEmpty, Site, S = #s{site = Local, conns = Conns, log = Log}) ->
-  case Conns of
-    #{Site := #conn{pid = Pid, acked = Acked}} ->
-      case copy_log(Acked, Log) of
-        [] when SkipEmpty ->
-          ok;
-        Delta ->
-          gen_server:cast(Pid, #cast_push{ from = Local
-                                         , since = Acked
-                                         , log = Delta
-                                         })
-      end;
-    #{} ->
-      ok
-  end,
-  S.
+-spec set_acked_in(classy:site(), clock(), #s{}) -> #s{}.
+set_acked_in(Site, Clock, S = #s{cbm = CBM, cbs = CBS, acked_in = A}) ->
+  ok = classy_rt:pset(CBM, CBS, {?cl_acked_in, Site}, Clock),
+  S#s{acked_in = A#{Site => Clock}}.
 
--spec sync(boolean(), #s{}) -> #s{}.
-sync(SkipEmpty, S = #s{conns = Conns}) ->
-  maps:fold(
-    fun(Site, _, Acc) ->
-        sync(SkipEmpty, Site, Acc)
-    end,
-    S,
-    Conns).
-
--spec get_acked(classy:site(), #s{}) -> clock().
-get_acked(Site, #s{acked = Acked}) ->
-  maps:get(Site, Acked, 0).
-
--spec set_acked(classy:site(), clock(), #s{}) -> #s{}.
-set_acked(Site, Clock, S = #s{acked = Acked}) ->
-  S#s{acked = Acked#{Site => Clock}}.
-
--spec site_of_conn(reference(), #s{}) -> {ok, classy:site()} | undefined.
-site_of_conn(Ref, #s{conns = Conns}) ->
-  try
-    maps:foreach(
-      fun(Site, #conn{mref = R}) ->
-          R =:= Ref andalso throw({found, Site})
-      end,
-      Conns),
-    undefined
-  catch
-    {found, Site} ->
-      {ok, Site}
-  end.
+-spec set_acked_out(classy:site(), clock(), #s{}) -> #s{}.
+set_acked_out(Site, Clock, S = #s{cbm = CBM, cbs = CBS, acked_out = A}) ->
+  ok = classy_rt:pset(CBM, CBS, {?cl_acked_in, Site}, Clock),
+  S#s{acked_out = A#{Site => Clock}}.
 
 %%--------------------------------------------------------------------------------
 %% Persistent state save/restore
 %%--------------------------------------------------------------------------------
 
--spec restore_log(module(), classy_rt:cbs()) -> [lentry()].
-restore_log(CBM, CBS) ->
-  L = classy_rt:plist(CBM, CBS, ?cl_log),
-  %% We need reverse chronological order:
-  lists:sort(
-    fun(A, B) -> B =< A end,
-    L).
+-spec restore_acked_in(module(), classy_rt:cbs()) -> #{classy:site() => clock()}.
+restore_acked_in(CBM, CBS) ->
+  maps:from_list(classy_rt:plist(CBM, CBS, ?cl_acked_in)).
 
--spec restore_last(module(), classy_rt:cbs()) -> #{classy:site() => op()}.
-restore_last(CBM, CBS) ->
-  maps:from_list(classy_rt:plist(CBM, CBS, ?cl_last)).
-
--spec restore_clocks(module(), classy_rt:cbs()) -> #{classy:site() => clock()}.
-restore_clocks(CBM, CBS) ->
-  maps:from_list(classy_rt:plist(CBM, CBS, ?cl_clock)).
-
--spec restore_acked(module(), classy_rt:cbs()) -> #{classy:site() => clock()}.
-restore_acked(CBM, CBS) ->
-  maps:from_list(classy_rt:plist(CBM, CBS, ?cl_acked)).
+-spec restore_acked_out(module(), classy_rt:cbs()) -> #{classy:site() => clock()}.
+restore_acked_out(CBM, CBS) ->
+  maps:from_list(classy_rt:plist(CBM, CBS, ?cl_acked_out)).

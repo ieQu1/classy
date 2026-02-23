@@ -174,6 +174,12 @@ Section merge.
     sauto unfold: merge, proper_pair_l use:merge0_symm.
   Qed.
 
+  Lemma merge_refl a :
+    merge a a = a.
+  Proof.
+    sauto unfold: merge use:merge0_refl.
+  Qed.
+
   Lemma merge_assoc a b c :
     proper_pair_l a b ->
     proper_pair_l b c ->
@@ -187,31 +193,5 @@ Section merge.
     let f acc elem := merge acc (Some elem) in
     fold_left f l None.
 
-  Definition proper_log (l : list LogEntry) :=
-    forall a b,
-      In a l -> In b l ->
-      proper_pair a b.
-
-  Lemma merge_proper_log_cons a l m :
-    proper_log (a :: l) ->
-    merge_l l = m ->
-    merge_l (a :: l) = merge (Some a) m.
-  Proof.
-    intros Hl Hm.
-    destruct m as [m|].
-    - unfold merge_l. simpl.
-  Abort.
-
-  Theorem proper_log_perm_maximum : forall l l',
-      proper_log l ->
-      Permutation l l' ->
-      merge_l l = merge_l l'.
-  Proof.
-    intros l l' Hprop Hperm.
-    induction Hperm.
-    - easy.
-    - give_up.
-    - replace (y :: x :: l) with ([y; x] ++ l) in * by reflexivity.
-      replace (x :: y :: l) with ([x; y] ++ l) by reflexivity.
-  Abort.
+  Definition proper_log (l : list LogEntry) : Prop := ForallPairs proper_pair l.
 End merge.

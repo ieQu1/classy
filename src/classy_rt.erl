@@ -4,7 +4,7 @@
 -module(classy_rt).
 
 %% API:
--export([init/3, terminate/2, get_membership_pid/3, pset/5, pdel/4, plist/3]).
+-export([init/3, terminate/2, get_membership_pid/3, pset/4, pdel/3, plist/3, pflush/2, time_s/1]).
 
 -export_type([cbs/0]).
 
@@ -31,27 +31,36 @@ Get PID of a potentially remote `classy_membership` server.
 
 -doc """
 Store a key-value pair persistently.
+
+Note: the runtime may buffer `classy_p(set/del)` operations.
 """.
--callback classy_pset(cbs(), ?cl_log, classy_membership:clock(), classy_membership:lentry()) -> ok;
-                     (cbs(), ?cl_last, classy:site(), classy_membership:op()) -> ok;
-                     (cbs(), ?cl_clock, classy:site(), classy_membership:clock()) -> ok;
-                     (cbs(), ?cl_acked, classy:site(), classy_membership:clock()) -> ok.
+-callback classy_pset(cbs(), {?cl_last, classy:site()}, classy_membership:op()) -> ok;
+                     (cbs(), ?cl_clock, classy_membership:clock()) -> ok;
+                     (cbs(), {?cl_acked_in | ?cl_acked_out, classy:site()}, classy_membership:clock()) -> ok.
 
 -doc """
 Delete a key-value pair persistently.
 """.
--callback classy_pdel(cbs(), ?cl_log, classy_membership:clock()) -> ok;
-                     (cbs(), ?cl_last, classy:site()) -> ok;
-                     (cbs(), ?cl_clock, classy:site()) -> ok;
-                     (cbs(), ?cl_acked, classy:site()) -> ok.
+-callback classy_pdel(cbs(), {?cl_last, classy:site()}) -> ok;
+                     (cbs(), ?cl_clock) -> ok;
+                     (cbs(), {?cl_acked_in | ?cl_acked_out, classy:site()}) -> ok.
 
 -doc """
 List persistent values.
 """.
--callback classy_plist(cbs(), ?cl_log) -> [classy_membership:lentry()];
-                      (cbs(), ?cl_last) -> [{classy:site(), classy_membership:op()}];
-                      (cbs(), ?cl_clock) -> [{classy:site(), classy_membership:clock()}];
-                      (cbs(), ?cl_acked) -> [{classy:site(), classy_membership:clock()}].
+-callback classy_plist(cbs(), ?cl_last) -> [{classy:site(), classy_membership:op()}];
+                      (cbs(), ?cl_clock) -> [classy_membership:clock()];
+                      (cbs(), ?cl_acked_in | ?cl_acked_out) -> [{classy:site(), classy_membership:clock()}].
+
+-doc """
+Flush the persistence buffers.
+""".
+-callback classy_psync(cbs()) -> ok.
+
+-doc """
+Get local unix time (in seconds).
+""".
+-callback classy_time_s() -> non_neg_integer().
 
 %%================================================================================
 %% API functions
@@ -70,23 +79,28 @@ terminate(Mod, CBS) ->
 get_membership_pid(Mod, Cluster, Site) ->
   Mod:classy_get_membership_pid(Cluster, Site).
 
--spec pset(module(), cbs(), ?cl_log, classy_membership:clock(), classy_membership:lentry()) -> ok;
-          (module(), cbs(), ?cl_last, classy:site(), classy_membership:op()) -> ok;
-          (module(), cbs(), ?cl_clock, classy:site(), classy_membership:clock()) -> ok;
-          (module(), cbs(), ?cl_clock, classy:site(), classy_membership:clock()) -> ok.
-pset(Mod, CBS, Kind, K, V) ->
-  Mod:classy_pset(CBS, Kind, K, V).
+-spec pset(module(), cbs(), {?cl_last, classy:site()}, classy_membership:op()) -> ok;
+          (module(), cbs(), ?cl_clock, classy_membership:clock()) -> ok;
+          (module(), cbs(), {?cl_acked_in | ?cl_acked_out, classy:site()}, classy_membership:clock()) -> ok.
+pset(Mod, CBS, K, V) ->
+  Mod:classy_pset(CBS, K, V).
 
--spec pdel(module(), cbs(), ?cl_log, classy_membership:clock()) -> ok;
-          (module(), cbs(), ?cl_last, classy:site()) -> ok;
-          (module(), cbs(), ?cl_clock, classy:site()) -> ok;
-          (module(), cbs(), ?cl_clock, classy:site()) -> ok.
-pdel(Mod, CBS, Kind, K) ->
-  Mod:classy_pdel(CBS, Kind, K).
+-spec pdel(module(), cbs(), {?cl_last, classy:site()}) -> ok;
+          (module(), cbs(), ?cl_clock) -> ok;
+          (module(), cbs(), {?cl_acked_in | ?cl_acked_out, classy:site()}) -> ok.
+pdel(Mod, CBS, K) ->
+  Mod:classy_pdel(CBS, K).
 
--spec plist(module(), cbs(), ?cl_log) -> [classy_membership:lentry()];
-           (module(), cbs(), ?cl_last) -> [{classy:site(), classy_membership:op()}];
-           (module(), cbs(), ?cl_clock) -> [{classy:site(), classy_membership:clock()}];
-           (module(), cbs(), ?cl_acked) -> [{classy:site(), classy_membership:clock()}].
+-spec plist(module(), cbs(), ?cl_last) -> [{classy:site(), classy_membership:op()}];
+           (module(), cbs(), ?cl_clock) -> [classy_membership:clock()];
+           (module(), cbs(), ?cl_acked_in | ?cl_acked_out) -> [{classy:site(), classy_membership:clock()}].
 plist(Mod, CBS, Kind) ->
   Mod:classy_plist(CBS, Kind).
+
+-spec pflush(module(), cbs()) -> ok.
+pflush(Mod, CBS) ->
+  Mod:classy_psync(CBS).
+
+-spec time_s(module()) -> non_neg_integer().
+time_s(Mod) ->
+  Mod:classy_time_s().
