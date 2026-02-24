@@ -7,109 +7,7 @@
 
 This module provides low-level API for maintaining and updating cluster membership information.
 Business code should not use it directly.
-
-# Logs
-
-Each site `S` maintains a command log `l[S]`.
-When a command (such as `join(S)` or `leave(S)`) is executed on a site,
-it is added to the log.
-
-Sites constantly try to broadcast their logs to known peers.
-
-# Logical Clocks
-
-Each site is associated with a Lamport clock.
-Value of the clock of site `A`, as viewed on site `B`, is denoted as `c[A, B]`.
-
-Clocks are updated in the following cases:
-
-- `c[A, A]` is incremented when site `A` appends a new command to `l[A]`.
-  Entries in `l[A]` are indexed by `c[A,A]`.
-- `c[A, B]` is incremented when `B` appends a command concerning `A` to `l[B]`.
-  New value of the clock is added to the command body.
-- `c[A, B]` is synced when `B` receives a message from or about `A`.
-
-# Event ordering
-
-Eventual consistency is assured by the existence of a total order of log entries.
-Provided that each site received all log entries from all peers (in any order),
-it derives peer membership states from the log entries of the maximum order.
-
-More formally,
-let `s[A, B]` be state of site `A` as perceived by `B`,
-and `L` be a concatenation of all logs from all sites,
-then `s[A, B] = to_state(maximum(fun(X, Y) -> ord(X) > ord(Y) end, filter(concerning_site(B), L)))`.
-
-If comparison function is transitive,
-and `ord(X) = ord(Y) → to_state(X) = to_state(Y)`,
-then the above expression returns the same value for every permutation of `L`.
-
-This module uses lexicographic order of `{c[Target, Origin], Magic, Origin}` triples as the event order.
-It satisfies the above conditions because
-a) lexicographic order is known to behave well.
-b) `{c[Target, Origin], Origin}` pair uniquely identifies `Target` membership state,
-   because Origin always increments its clock after issuing a command about Target.
-
-Note that this total order is *not* causal.
-Practically, lack of strict causality means that cluster will eventually converge to the same state,
-but earlier join/leave commands may override later commands.
-
-These adverse side effects can be observed when conflicting commands are issued on different nodes faster than the nodes sync with each other.
-This is most likely to happen during a network partition.
-
-# Log Syncing
-
-Typical scenario:
-
-```
-  A                      B
-  |                      |
-  |--[{1,a}]------------>|
-  |                      |
-  |<--ack 1--------------|
-  |                      |
-  |--[{2,b}]------------>|
-  |                      |
-  |<--ack 2--------------|
-  ...
-```
-
-Possible scenarios:
-
-```
-  A                      B
-  |                      |
-  |--[{1,a}]------------>|
-  |                      |
-  |--[{1,a},{2,b}]------>|
-  |                      |
-  |<--ack 1--------------|
-  |                      |
-  |--[{2,b},{3,c}]------>|
-  |                      |
-  |-[{2,b},{3,c},{4,d}]->|
-  |                      |
-  |<--ack 3--------------|
-  ...
-```
-
-or
-
-```
-  A                      B
-  |                      |
-  |                      |
-  |--[{2,b},{3,c}]------>|
-  |                      |
-  |<--ack 0--------------|
-  |                      |
-  |-[{1,a},{2,b},{3,c}]->|
-  |                      |
-  ...
-```
-
 """.
-
 
 -behavior(gen_server).
 
@@ -348,6 +246,20 @@ terminate(_Reason, S = #s{cbm = CBM, cbs = CBS}) ->
 %% Internal functions
 %%================================================================================
 
+-doc """
+Total order of the operation.
+
+Note that this total order is *not* strictly causal,
+because Lamport clocks don't provide such guarantee.
+
+Practically, lack of strict causality means the cluster will eventually converge to the same state,
+but earlier join/leave commands may override later commands.
+
+These adverse side effects can be observed when conflicting commands are issued on different nodes faster than the nodes sync with each other.
+This is most likely to happen during a network partition.
+
+Please see `theories/classy.v` for more details and some intricate requirements for `ord` function.
+""".
 -spec ord(op()) -> ord().
 ord(#op_set{c = C, m = M, origin = O}) ->
   {C, M, O}.

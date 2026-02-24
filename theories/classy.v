@@ -1,13 +1,18 @@
 Require Import
-  Orders
   List
-  Permutation
-  Logic.ProofIrrelevance.
+  Orders
+  Permutation.
 
 Import ListNotations.
 
 From Hammer Require Import Tactics.
 
+(** The below section describes a class of total orders that "works as
+Erlang term comparison".
+
+Formally, it expands stdlib's [StrictOrder] class to be decidable,
+and so that [~ a<b /\ ~ b<a] implies [a = b].
+*)
 Section compares.
   Context `{StrictOrder}.
 
@@ -25,17 +30,28 @@ Global Arguments StrictOrderDec (A _).
 
 Infix "<?>" := compare_dec (at level 50).
 
+(** Now let's prove some very general properties about CRDT convergence.
+
+    Note: the following section reasons about state of a single site.
+ *)
 Section merge.
-  Context {LogEntry Ord : Set} `{Hdecord : StrictOrderDec Ord}.
+  Context {Operation Ord : Set} `{Hdecord : StrictOrderDec Ord}.
 
-  Parameter ord : LogEntry -> Ord.
+  (** Eventual consistency is assured by commutativity, idempotence and associativity of state merge function.
 
+      In our case, merge operation is defined via the total order of state update operations.
+
+      [ord] is some function that returns order of the operation: *)
+  Parameter ord : Operation -> Ord.
+
+  (** When we merge two operations, one with the greater order wins: *)
   Definition merge0 a b :=
     match ord a <?> ord b with
     | comp_lt _ _ _ => b
     | _ => a
     end.
 
+  (* begin details *)
   Lemma Rab_to_ord a b:
     R a b ->
     exists H, a <?> b = comp_lt a b H.
@@ -59,16 +75,37 @@ Section merge.
     - exfalso. specialize (Htran _ _ _ H r) as H1. now apply Hirr in H1.
     - now exists r.
   Qed.
+  (* end details *)
 
-  Lemma merge0_refl a : merge0 a a = a.
+  (** It's trivial to prove that this operation is idempotent. *)
+  Lemma merge0_idemp a : merge0 a a = a.
   Proof.
     sauto unfold:merge0.
   Qed.
 
+  (** Things get more complicated when it comes to merging two or more operations.
+
+      Notice that in general different operations may have the same order.
+      This is bad news, because it can break many properties of the merge operation (associativity, idempotency and commutativity).
+      In practical terms,
+      it makes the result of merge dependent on the order of network interations between the peers.
+
+      It's also not practical to demand [ord] function to be bijective.
+      Instead, we require that any two different operations have different [ord] *in the context of the merge operation*:
+   *)
   Definition proper_pair a b :=
     ord a = ord b ->
     a = b.
+  (** ...Going back to the Erlang code,
+      let's informally prove that this weaker property ([proper_pair]) is satisfied for every pair of operations created by the running system.
 
+      By definition, [ord] is a triple of [{Clock, Magic, Origin}] fields from the original record.
+      Observe that pair of values [Origin] and [Clock] is always unique:
+      every time [Origin] site issues an operation about any other site,
+      it increments the clock.
+   *)
+
+  (* begin details *)
   Lemma merge0_lt a b :
     proper_pair a b ->
     R (ord a) (ord b) ->
@@ -90,22 +127,24 @@ Section merge.
     destruct H as [H Hl].
     unfold merge0. now rewrite Hl.
   Qed.
+  (* end details *)
 
-  Lemma merge0_symm a b :
+  (** For every proper pair of operations [merge0] is commutative: *)
+  Lemma merge0_commut a b :
     proper_pair a b ->
     merge0 a b = merge0 b a.
   Proof.
     intros Hproper.
     unfold merge0.
-    remember (ord a <?> ord b) as ab.
-    remember (ord b <?> ord a) as ba.
     destruct Hord as [Hirr Htran].
-    destruct ab as [ab|ab|ab]; destruct ba as [ba|ba|ba];
+    destruct (ord a <?> ord b) as [ab|ab|ab];
+    destruct (ord b <?> ord a) as [ba|ba|ba];
       subst; try apply Hproper; try easy;
-      specialize (Htran _ _ _ ab ba) as Hcontr;
-      now apply Hirr in Hcontr.
+      specialize (Htran _ _ _ ab ba) as Hcontradiction;
+      now apply Hirr in Hcontradiction.
   Qed.
 
+  (* begin details *)
   Ltac rev_eq :=
     let H1 := fresh in
     let H2 := fresh in
@@ -113,7 +152,7 @@ Section merge.
     | [ H1 : ord ?a = ord ?b, H2 : proper_pair ?a ?b |- _ ] =>
         apply H2 in H1;
         subst;
-        repeat rewrite merge0_refl
+        repeat rewrite merge0_idemp
     end.
 
   Ltac rev_lt :=
@@ -131,13 +170,15 @@ Section merge.
     | [ H1 : R (ord ?b) (ord ?a), H2 : proper_pair ?a ?b |- _ ] =>
         rewrite (merge0_gt a b H2 H1)
     end.
+  (* end details *)
 
+  (** For any mutually proper pair of operations [merge0] is associative: *)
   Lemma merge0_assoc a b c :
     proper_pair a b ->
     proper_pair b c ->
     proper_pair a c ->
     merge0 (merge0 a b) c = merge0 a (merge0 b c).
-  Proof with repeat (rev_eq || rev_lt || rev_gt); try rewrite merge0_refl; try easy.
+  Proof with repeat (rev_eq || rev_lt || rev_gt); try rewrite merge0_idemp; try easy.
     intros Hproper_ab Hproper_bc Hproper_ac.
     unfold max.
     destruct (ord a <?> ord b) as [ab|ab|ab].
@@ -151,7 +192,9 @@ Section merge.
       + rewrite (merge0_gt a c); sauto.
   Qed.
 
-  Definition Last := option LogEntry.
+  (** Now let's expand our definition of merge to the case where previous operation is unknown:
+   *)
+  Definition Last := option Operation.
 
   Definition merge (a b : Last) : Last :=
     match a, b with
@@ -167,19 +210,22 @@ Section merge.
     | _, _ => True
     end.
 
-  Lemma merge_symm a b :
+  (** This expanded definition is also commutative: *)
+  Lemma merge_commut a b :
     proper_pair_l a b ->
     merge a b = merge b a.
   Proof.
-    sauto unfold: merge, proper_pair_l use:merge0_symm.
+    sauto unfold: merge, proper_pair_l use:merge0_commut.
   Qed.
 
-  Lemma merge_refl a :
+  (** ...idempotent: *)
+  Lemma merge_idemp a :
     merge a a = a.
   Proof.
-    sauto unfold: merge use:merge0_refl.
+    sauto unfold: merge use:merge0_idemp.
   Qed.
 
+  (** ...and associative: *)
   Lemma merge_assoc a b c :
     proper_pair_l a b ->
     proper_pair_l b c ->
@@ -189,9 +235,9 @@ Section merge.
     sauto unfold: merge, proper_pair_l use:merge0_assoc.
   Qed.
 
-  Definition merge_l (l : list LogEntry) : Last :=
+  Definition merge_l (l : list Operation) : Last :=
     let f acc elem := merge acc (Some elem) in
     fold_left f l None.
 
-  Definition proper_log (l : list LogEntry) : Prop := ForallPairs proper_pair l.
+  Definition proper_log (l : list Operation) : Prop := ForallPairs proper_pair l.
 End merge.
