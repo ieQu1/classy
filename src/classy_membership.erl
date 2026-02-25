@@ -18,17 +18,18 @@ Business code should not use it directly.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([create_tables/0, delete_tables/0, start_link/1]).
+-export([start_link/1]).
 
--export_type([start_args/0, op/0, ord/0, clock/0, mementry/0]).
+-export_type([start_args/0, op/0, ord/0, clock/0]).
 
--include("classy_rt.hrl").
+-include("classy_internal.hrl").
 
 %%================================================================================
 %% Type declarations
 %%================================================================================
 
 -define(default_sync_timeout, 100).
+-define(ptab, classy_membership).
 
 -type start_args() ::
         #{ module  := module()
@@ -87,16 +88,6 @@ Projection of `op()` fields used to establish total order of logs.
 -record(call_kick, {target :: classy:site()}).
 
 %% Type of data stored in ets:
--record(memtable, {k, op, mem, tou}).
--define(memtable, ?MODULE).
--type mementry() ::
-        #memtable{ k :: {classy:cluster_id(), _Local :: classy:site(), _Target :: classy:site()}
-                 , op :: op()
-                   %% State, immeditely derived from `op':
-                 , mem :: boolean()
-                   %% Local logical time of the last update to the entry:
-                 , tou :: clock()
-                 }.
 
 -record(s,
         { %% Cluster ID:
@@ -105,16 +96,22 @@ Projection of `op()` fields used to establish total order of logs.
         , site :: classy:site()
           %% Runtime callback module:
         , cbm :: module()
-          %% State of the runtime CBM:
-        , cbs :: classy_rt:cbs()
         , sync_timer :: undefined | reference()
-          %% Clock of the last successful sync *from* site:
-        , acked_in :: #{classy:site() => clock()}
-          %% Clock of the last successful sync *to* site:
-        , acked_out :: #{classy:site() => clock()}
           %% Logical clock:
         , clock :: clock()
         }).
+
+%% pstore keys:
+-record(pk_clock, {c :: classy:cluster_id(), s :: classy:site()}).
+
+-record(pk_acked_in, {c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}).
+-record(pk_acked_out, {c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}).
+
+-record(pk_last, {c, l, r}).
+-type pk_last() :: #pk_last{c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}.
+
+-record(pv_last, {op, mem, tou}).
+-type pv_last() :: #pv_last{op :: op(), mem :: boolean(), tou :: clock()}.
 
 %%================================================================================
 %% API functions
@@ -171,25 +168,18 @@ In both cases the result value can't be trusted.
 """.
 -spec members(classy:cluster_id(), classy:site()) -> [classy:site()].
 members(Cluster, Local) ->
-  MS = {#memtable{k = {Cluster, Local, '$1'}, mem = true, _ = '_'}, [], ['$1']},
-  ets:select(?memtable, [MS]).
+  MS = { #classy_pstore{ k = #pk_last{c = Cluster, l = Local, r = '$1'}
+                       , v = #pv_last{mem = true, _ = '_'}
+                       , _ = '_'
+                       }
+       , []
+       , ['$1']
+       },
+  ets:select(?ptab, [MS]).
 
 %%================================================================================
 %% Internal exports
 %%================================================================================
-
--doc """
-This function should be called by the supervisor before starting any instances of this server.
-""".
--spec create_tables() -> ok.
-create_tables() ->
-  ets:new(?memtable, [named_table, public, {keypos, #memtable.k}]),
-  ok.
-
--spec delete_tables() -> ok.
-delete_tables() ->
-  ets:delete(?memtable),
-  ok.
 
 -spec start_link(start_args()) -> {ok, pid()}.
 start_link(Args = #{module := CBM, cluster := _, site := _}) when is_atom(CBM) ->
@@ -202,16 +192,16 @@ start_link(Args = #{module := CBM, cluster := _, site := _}) when is_atom(CBM) -
 -spec init(start_args()) -> {ok, #s{}}.
 init(#{module := CBM, cluster := Cluster, site := Site}) ->
   process_flag(trap_exit, true),
-  {ok, CBS} = classy_rt:init(CBM, Cluster, Site),
+  ok = classy_pstore:open(?ptab, #{}),
+  case classy_pstore:lookup(?ptab, #pk_clock{c = Cluster, s = Site}) of
+    [Clock] -> ok;
+    [] -> Clock = 0
+  end,
   S = #s{ cluster = Cluster
         , site = Site
         , cbm = CBM
-        , cbs = CBS
-        , acked_in = restore_acked_in(CBM, CBS)
-        , acked_out = restore_acked_out(CBM, CBS)
-        , clock = restore_clock(CBM, CBS)
+        , clock = Clock
         },
-  memtab_restore(S),
   {ok, need_sync(0, S)}.
 
 handle_call(#call_join{target = Target}, _From, S0) ->
@@ -230,17 +220,15 @@ handle_cast(_Cast, S) ->
 
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
-handle_info(#to_sync_out{}, S0 = #s{cbm = CBM, cbs = CBS}) ->
+handle_info(#to_sync_out{}, S0) ->
   S = S0#s{sync_timer = undefined},
-  ok = classy_rt:pflush(CBM, CBS),
+  ok = classy_pstore:flush(?ptab),
   {noreply, handle_sync_out(S)};
 handle_info(_Info, S) ->
   {noreply, S}.
 
-terminate(_Reason, S = #s{cbm = CBM, cbs = CBS}) ->
-  memtab_clean(S),
-  ok = classy_rt:pflush(CBM, CBS),
-  classy_rt:terminate(CBM, CBS).
+terminate(_Reason, #s{}) ->
+  classy_pstore:flush(?ptab).
 
 %%================================================================================
 %% Internal functions
@@ -297,10 +285,9 @@ handle_sync_in(Req, S0) ->
       lists:foreach(
         fun(Op) -> merge(Cl, Op, S) end,
         Data),
-      need_sync(
-        set_acked_in(
-          From, Cf,
-          set_acked_out(From, AckedOut, S)));
+      set_acked_in(From, Cf, S),
+      set_acked_out(From, AckedOut, S),
+      need_sync(S);
      false ->
       %% Gap in sequence. Ignore this message. Peer will be notified
       %% about the expected acked value during the next sync-out:
@@ -355,15 +342,17 @@ merge(LTime, Op, S) ->
 Apply operation to the persistent state and memtable.
 """.
 -spec set_last(clock(), op(), #s{}) -> #s{}.
-set_last(LTime, Op, S = #s{cbm = CBM, cbs = CBS}) ->
+set_last(LTime, Op, S = #s{cluster = Cluster, site = Local}) ->
   #op_set{target = Target} = Op,
-  ok = classy_rt:pset(CBM, CBS, {?cl_last, Target}, Op),
-  memtab_set(LTime, Op, S).
+  classy_pstore:write(
+    ?ptab,
+    #pk_last{c = Cluster, l = Local, r = Target},
+    #pv_last{op = Op, tou = LTime, mem = state(Op)}).
 
 -spec memtab_lookup(classy:site(), #s{}) -> {ok, op()} | undefined.
 memtab_lookup(Site, #s{cluster = Cluster, site = Local}) ->
-  case ets:lookup(?memtable, {Cluster, Local, Site}) of
-    [#memtable{op = Op}] ->
+  case classy_pstore:lookup(?ptab, #pk_last{c = Cluster, l = Local, r = Site}) of
+    [#pv_last{op = Op}] ->
       {ok, Op};
     [] ->
       undefined
@@ -371,46 +360,24 @@ memtab_lookup(Site, #s{cluster = Cluster, site = Local}) ->
 
 -spec memtab_since(clock(), #s{}) -> [op()].
 memtab_since(Since, #s{cluster = Cluster, site = Local}) ->
-  MS = { #memtable{ k = {Cluster, Local, '_'}
-                  , op = '$1'
-                  , tou = '$2'
-                  , _ = '_'
-                  }
+  MS = { #classy_pstore{ k = #pk_last{c = Cluster, l = Local, r = '_'}
+                       , v = #pv_last{op = '$1', tou = '$2', _ = '_'}
+                       , _ = '_'
+                       }
        , [{'>=', '$2', Since}]
        , ['$1']
        },
-  ets:select(?memtable, [MS]).
-
--spec memtab_restore(#s{}) -> ok.
-memtab_restore(S = #s{cbm = CBM, cbs = CBS, clock = Cl}) ->
-  memtab_clean(S),
-  L = classy_rt:plist(CBM, CBS, ?cl_last),
-  lists:foreach(
-    fun({_Target, Op}) ->
-        memtab_set(Cl, Op, S)
-    end,
-    L).
-
--spec memtab_set(clock(), op(), #s{}) -> #s{}.
-memtab_set(LTime, Op, S = #s{cluster = Cluster, site = Local}) ->
-  #op_set{target = Target} = Op,
-  MemEntry = #memtable{ k = {Cluster, Local, Target}
-                      , op = Op
-                      , tou = LTime
-                      , mem = state(Op)
-                      },
-  ets:insert(?memtable, MemEntry),
-  S.
-
--spec memtab_clean(#s{}) -> ok.
-memtab_clean(#s{cluster = Cluster, site = Local}) ->
-  ets:match_delete(?memtable, #memtable{k = {Cluster, Local, '_'}, _ = '_'}),
-  ok.
+  ets:select(?ptab, [MS]).
 
 -spec peers(#s{}) -> [classy:site()].
 peers(#s{cluster = Cluster, site = Local}) ->
-  MS = {#memtable{k = {Cluster, Local, '$1'}, _ = '_'}, [], ['$1']},
-  ets:select(?memtable, [MS]).
+  MS = { #classy_pstore{ k = #pk_last{c = Cluster, l = Local, r = '$1'}
+                       , _ = '_'
+                       }
+       , []
+       , ['$1']
+       },
+  ets:select(?ptab, [MS]).
 
 %%--------------------------------------------------------------------------------
 %% Logical clocks
@@ -420,25 +387,21 @@ peers(#s{cluster = Cluster, site = Local}) ->
 inc_get_clock(S0 = #s{clock = C0}) ->
   C = C0 + 1,
   S = S0#s{clock = C},
-  psave_clock(S),
+  save_clock(S),
   {C, S}.
 
 -spec sync_clock(clock(), #s{}) -> #s{}.
 sync_clock(T1, S0 = #s{clock = T0}) ->
   S = S0#s{clock = max(T0, T1)},
-  psave_clock(S),
+  save_clock(S),
   S.
 
--spec restore_clock(module(), classy_rt:cbs()) -> clock().
-restore_clock(CBM, CBS) ->
-  case classy_rt:plist(CBM, CBS, ?cl_clock) of
-    [C] when is_integer(C) -> C;
-    [] -> 0
-  end.
-
--spec psave_clock(#s{}) -> ok.
-psave_clock(#s{cbm = CBM, cbs = CBS, clock = C}) ->
-  classy_rt:pset(CBM, CBS, ?cl_clock, C).
+-spec save_clock(#s{}) -> ok.
+save_clock(#s{cluster = Cluster, site = Local, clock = Clock}) ->
+  classy_pstore:dirty_write(
+    ?ptab,
+    #pk_clock{c = Cluster, s = Local},
+    Clock).
 
 %%--------------------------------------------------------------------------------
 %% Functions related to the p2p protocol
@@ -465,31 +428,29 @@ need_sync(Timeout, S = #s{sync_timer = undefined}) ->
   S#s{sync_timer = TRef}.
 
 -spec get_acked_in(classy:site(), #s{}) -> clock().
-get_acked_in(Site, #s{acked_in = A}) ->
-  maps:get(Site, A, 0).
+get_acked_in(Site, #s{cluster = C, site = Local}) ->
+  case classy_pstore:lookup(?ptab, #pk_acked_in{c = C, l = Local, r = Site}) of
+    [Clock] -> Clock;
+    []      -> 0
+  end.
 
 -spec get_acked_out(classy:site(), #s{}) -> clock().
-get_acked_out(Site, #s{acked_out = A}) ->
-  maps:get(Site, A, 0).
+get_acked_out(Site, #s{cluster = C, site = Local}) ->
+  case classy_pstore:lookup(?ptab, #pk_acked_out{c = C, l = Local, r = Site}) of
+    [Clock] -> Clock;
+    []      -> 0
+  end.
 
--spec set_acked_in(classy:site(), clock(), #s{}) -> #s{}.
-set_acked_in(Site, Clock, S = #s{cbm = CBM, cbs = CBS, acked_in = A}) ->
-  ok = classy_rt:pset(CBM, CBS, {?cl_acked_in, Site}, Clock),
-  S#s{acked_in = A#{Site => Clock}}.
+-spec set_acked_in(classy:site(), clock(), #s{}) -> ok.
+set_acked_in(Site, Clock, #s{cluster = Cluster, site = Local}) ->
+  classy_pstore:dirty_write(
+    ?ptab,
+    #pk_acked_in{c = Cluster, l = Local, r = Site},
+    Clock).
 
--spec set_acked_out(classy:site(), clock(), #s{}) -> #s{}.
-set_acked_out(Site, Clock, S = #s{cbm = CBM, cbs = CBS, acked_out = A}) ->
-  ok = classy_rt:pset(CBM, CBS, {?cl_acked_in, Site}, Clock),
-  S#s{acked_out = A#{Site => Clock}}.
-
-%%--------------------------------------------------------------------------------
-%% Persistent state save/restore
-%%--------------------------------------------------------------------------------
-
--spec restore_acked_in(module(), classy_rt:cbs()) -> #{classy:site() => clock()}.
-restore_acked_in(CBM, CBS) ->
-  maps:from_list(classy_rt:plist(CBM, CBS, ?cl_acked_in)).
-
--spec restore_acked_out(module(), classy_rt:cbs()) -> #{classy:site() => clock()}.
-restore_acked_out(CBM, CBS) ->
-  maps:from_list(classy_rt:plist(CBM, CBS, ?cl_acked_out)).
+-spec set_acked_out(classy:site(), clock(), #s{}) -> ok.
+set_acked_out(Site, Clock, #s{cluster = Cluster, site = Local}) ->
+  classy_pstore:dirty_write(
+    ?ptab,
+    #pk_acked_out{c = Cluster, l = Local, r = Site},
+    Clock).
