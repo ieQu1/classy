@@ -31,6 +31,9 @@ Business code should not use it directly.
 -define(default_sync_timeout, 100).
 -define(ptab, classy_membership).
 
+-define(name(CLUSTER, SITE), {n, l, {?MODULE, CLUSTER, SITE}}).
+-define(via(CLUSTER, SITE), {via, gproc, ?name(CLUSTER, SITE)}).
+
 -type start_args() ::
         #{ module  := module()
          , cluster := classy:cluster_id()
@@ -128,15 +131,10 @@ and even then some records about it may be kept around.
 """.
 -spec join(module(), classy:cluster_id(), classy:site(), classy:site()) -> ok | {error, _}.
 join(CBM, Cluster, Local, Target) ->
-  case classy_rt:get_membership_pid(CBM, Cluster, Local) of
-    Pid when is_pid(Pid) ->
-      try
-        gen_server:call(Pid, #call_join{target = Target})
-      catch
-        EC:Err -> {error, {EC, Err}}
-      end;
-    undefined ->
-      {error, noproc}
+  try
+    gen_server:call(?via(Cluster, Local), #call_join{target = Target})
+  catch
+    EC:Err -> {error, {EC, Err}}
   end.
 
 -doc """
@@ -147,15 +145,10 @@ Nodes will continue to propagate a record saying that target site is not part of
 """.
 -spec kick(module(), classy:cluster_id(), classy:site(), classy:site()) -> ok.
 kick(CBM, Cluster, Local, Target) ->
-  case classy_rt:get_membership_pid(CBM, Cluster, Local) of
-    Pid when is_pid(Pid) ->
-      try
-        gen_server:call(Pid, #call_kick{target = Target})
-      catch
-        EC:Err -> {error, {EC, Err}}
-      end;
-    undefined ->
-      {error, noproc}
+  try
+    gen_server:call(?via(Cluster, Local), #call_kick{target = Target})
+  catch
+    EC:Err -> {error, {EC, Err}}
   end.
 
 -doc """
@@ -182,8 +175,8 @@ members(Cluster, Local) ->
 %%================================================================================
 
 -spec start_link(start_args()) -> {ok, pid()}.
-start_link(Args = #{module := CBM, cluster := _, site := _}) when is_atom(CBM) ->
-  gen_server:start_link(?MODULE, Args, []).
+start_link(Args = #{module := CBM, cluster := Cluster, site := Local}) when is_atom(CBM) ->
+  gen_server:start_link(?via(Cluster, Local), ?MODULE, Args, []).
 
 %%================================================================================
 %% behavior callbacks
