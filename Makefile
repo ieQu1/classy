@@ -46,18 +46,18 @@ CONCUERROR_RUN := $(CONCUERROR) \
 	--treat_as_normal shutdown --treat_as_normal normal --treat_as_normal intentional \
 	--treat_as_normal optvar_set --treat_as_normal optvar_stopped --treat_as_normal optvar_retry \
 	-x code -x code_server -x error_handler \
-	-pa $(BUILD_DIR)/concuerror+test/lib/snabbkaffe/ebin \
-	-pa $(BUILD_DIR)/concuerror+test/lib/optvar/ebin \
-	-pa $(BUILD_DIR)/concuerror+test/lib/classy/ebin
+	--pa $(BUILD_DIR)/concuerror+test/lib/snabbkaffe/ebin \
+	--pa $(BUILD_DIR)/concuerror+test/lib/optvar/ebin \
+	--pa $(BUILD_DIR)/concuerror+test/lib/gproc/ebin \
+	--pa $(BUILD_DIR)/concuerror+test/lib/classy/ebin
 
-concuerror = $(CONCUERROR_RUN) -f $(BUILD_DIR)/concuerror+test/lib/mria/test/concuerror_tests.beam -t $(1) || \
+concuerror = $(CONCUERROR_RUN) -f $(BUILD_DIR)/concuerror+test/lib/classy/test/concuerror_tests.beam -t $(1) || \
 	{ cat concuerror_report.txt; exit 1; }
 
 .PHONY: concuerror_test
 concuerror_test: $(CONCUERROR)
 	rebar3 as concuerror eunit -m concuerror_tests
-	$(call concuerror,wait_for_shards_timeout_test)
-
+	#$(call concuerror,tab_open_test)
 
 $(CONCUERROR):
 	mkdir -p _build/

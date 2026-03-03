@@ -16,6 +16,6 @@
 -ifndef(CLASSY_INTERNAL_HRL).
 -define(CLASSY_INTERNAL_HRL, true).
 
--record(classy_pstore, {k, v, dirty}).
+-record(classy_kv, {k, v}).
 
 -endif.

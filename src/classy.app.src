@@ -6,10 +6,12 @@
         kernel,
         stdlib,
         snabbkaffe,
-        gproc
+        gproc,
+        optvar
     ]},
     {env, []},
     {modules, []},
+    {mod, {classy_app, []}},
     {licenses, ["Apache-2.0"]},
     {links, []}
  ]}.

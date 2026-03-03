@@ -161,10 +161,10 @@ In both cases the result value can't be trusted.
 """.
 -spec members(classy:cluster_id(), classy:site()) -> [classy:site()].
 members(Cluster, Local) ->
-  MS = { #classy_pstore{ k = #pk_last{c = Cluster, l = Local, r = '$1'}
-                       , v = #pv_last{mem = true, _ = '_'}
-                       , _ = '_'
-                       }
+  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1'}
+                   , v = #pv_last{mem = true, _ = '_'}
+                   , _ = '_'
+                   }
        , []
        , ['$1']
        },
@@ -185,8 +185,8 @@ start_link(Args = #{module := CBM, cluster := Cluster, site := Local}) when is_a
 -spec init(start_args()) -> {ok, #s{}}.
 init(#{module := CBM, cluster := Cluster, site := Site}) ->
   process_flag(trap_exit, true),
-  ok = classy_pstore:open(?ptab, #{}),
-  case classy_pstore:lookup(?ptab, #pk_clock{c = Cluster, s = Site}) of
+  ok = classy_table:open(?ptab, #{}),
+  case classy_table:lookup(?ptab, #pk_clock{c = Cluster, s = Site}) of
     [Clock] -> ok;
     [] -> Clock = 0
   end,
@@ -215,13 +215,13 @@ handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
 handle_info(#to_sync_out{}, S0) ->
   S = S0#s{sync_timer = undefined},
-  ok = classy_pstore:flush(?ptab),
+  ok = classy_table:flush(?ptab),
   {noreply, handle_sync_out(S)};
 handle_info(_Info, S) ->
   {noreply, S}.
 
 terminate(_Reason, #s{}) ->
-  classy_pstore:flush(?ptab).
+  classy_table:flush(?ptab).
 
 %%================================================================================
 %% Internal functions
@@ -331,20 +331,17 @@ merge(LTime, Op, S) ->
 %% Interface for site state storage
 %%--------------------------------------------------------------------------------
 
--doc """
-Apply operation to the persistent state and memtable.
-""".
--spec set_last(clock(), op(), #s{}) -> #s{}.
-set_last(LTime, Op, S = #s{cluster = Cluster, site = Local}) ->
+-spec set_last(clock(), op(), #s{}) -> ok.
+set_last(LTime, Op, #s{cluster = Cluster, site = Local}) ->
   #op_set{target = Target} = Op,
-  classy_pstore:write(
+  classy_table:dirty_write(
     ?ptab,
     #pk_last{c = Cluster, l = Local, r = Target},
     #pv_last{op = Op, tou = LTime, mem = state(Op)}).
 
 -spec memtab_lookup(classy:site(), #s{}) -> {ok, op()} | undefined.
 memtab_lookup(Site, #s{cluster = Cluster, site = Local}) ->
-  case classy_pstore:lookup(?ptab, #pk_last{c = Cluster, l = Local, r = Site}) of
+  case classy_table:lookup(?ptab, #pk_last{c = Cluster, l = Local, r = Site}) of
     [#pv_last{op = Op}] ->
       {ok, Op};
     [] ->
@@ -353,10 +350,10 @@ memtab_lookup(Site, #s{cluster = Cluster, site = Local}) ->
 
 -spec memtab_since(clock(), #s{}) -> [op()].
 memtab_since(Since, #s{cluster = Cluster, site = Local}) ->
-  MS = { #classy_pstore{ k = #pk_last{c = Cluster, l = Local, r = '_'}
-                       , v = #pv_last{op = '$1', tou = '$2', _ = '_'}
-                       , _ = '_'
-                       }
+  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '_'}
+                   , v = #pv_last{op = '$1', tou = '$2', _ = '_'}
+                   , _ = '_'
+                   }
        , [{'>=', '$2', Since}]
        , ['$1']
        },
@@ -364,9 +361,9 @@ memtab_since(Since, #s{cluster = Cluster, site = Local}) ->
 
 -spec peers(#s{}) -> [classy:site()].
 peers(#s{cluster = Cluster, site = Local}) ->
-  MS = { #classy_pstore{ k = #pk_last{c = Cluster, l = Local, r = '$1'}
-                       , _ = '_'
-                       }
+  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1'}
+                   , _ = '_'
+                   }
        , []
        , ['$1']
        },
@@ -391,7 +388,7 @@ sync_clock(T1, S0 = #s{clock = T0}) ->
 
 -spec save_clock(#s{}) -> ok.
 save_clock(#s{cluster = Cluster, site = Local, clock = Clock}) ->
-  classy_pstore:dirty_write(
+  classy_table:dirty_write(
     ?ptab,
     #pk_clock{c = Cluster, s = Local},
     Clock).
@@ -422,28 +419,28 @@ need_sync(Timeout, S = #s{sync_timer = undefined}) ->
 
 -spec get_acked_in(classy:site(), #s{}) -> clock().
 get_acked_in(Site, #s{cluster = C, site = Local}) ->
-  case classy_pstore:lookup(?ptab, #pk_acked_in{c = C, l = Local, r = Site}) of
+  case classy_table:lookup(?ptab, #pk_acked_in{c = C, l = Local, r = Site}) of
     [Clock] -> Clock;
     []      -> 0
   end.
 
 -spec get_acked_out(classy:site(), #s{}) -> clock().
 get_acked_out(Site, #s{cluster = C, site = Local}) ->
-  case classy_pstore:lookup(?ptab, #pk_acked_out{c = C, l = Local, r = Site}) of
+  case classy_table:lookup(?ptab, #pk_acked_out{c = C, l = Local, r = Site}) of
     [Clock] -> Clock;
     []      -> 0
   end.
 
 -spec set_acked_in(classy:site(), clock(), #s{}) -> ok.
 set_acked_in(Site, Clock, #s{cluster = Cluster, site = Local}) ->
-  classy_pstore:dirty_write(
+  classy_table:dirty_write(
     ?ptab,
     #pk_acked_in{c = Cluster, l = Local, r = Site},
     Clock).
 
 -spec set_acked_out(classy:site(), clock(), #s{}) -> ok.
 set_acked_out(Site, Clock, #s{cluster = Cluster, site = Local}) ->
-  classy_pstore:dirty_write(
+  classy_table:dirty_write(
     ?ptab,
     #pk_acked_out{c = Cluster, l = Local, r = Site},
     Clock).
