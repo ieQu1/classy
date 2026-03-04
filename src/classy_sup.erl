@@ -6,7 +6,7 @@
 -behavior(supervisor).
 
 %% API:
--export([ start_link/1
+-export([ start_link/0
         , stop/1
         , start_table/2
         , start_membership/2
@@ -16,8 +16,8 @@
 -export([init/1]).
 
 %% internal exports:
--export([ start_link_table_sup/1
-        , start_link_membership_sup/1
+-export([ start_link_table_sup/0
+        , start_link_membership_sup/0
         ]).
 
 -export_type([]).
@@ -26,9 +26,9 @@
 %% Type declarations
 %%================================================================================
 
--record(top, {rt :: module()}).
--record(table_sup, {rt :: module()}).
--record(membership_sup, {rt :: module()}).
+-record(top, {}).
+-record(table_sup, {}).
+-record(membership_sup, {}).
 
 -define(SUP, ?MODULE).
 -define(TABLE_SUP, classy_table_sup).
@@ -38,9 +38,9 @@
 %% API functions
 %%================================================================================
 
--spec start_link(module()) -> supervisor:startlink_ret().
-start_link(RT) ->
-  supervisor:start_link({local, ?SUP}, ?MODULE, #top{rt = RT}).
+-spec start_link() -> supervisor:startlink_ret().
+start_link() ->
+  supervisor:start_link({local, ?SUP}, ?MODULE, #top{}).
 
 -spec stop(timeout()) -> ok.
 stop(Timeout) ->
@@ -71,21 +71,29 @@ start_membership(Cluster, Site) ->
 %% Internal exports
 %%================================================================================
 
--spec start_link_table_sup(module()) -> supervisor:startlink_ret().
-start_link_table_sup(RT) ->
-  supervisor:start_link({local, ?TABLE_SUP}, ?MODULE, #table_sup{rt = RT}).
+-spec start_link_table_sup() -> supervisor:startlink_ret().
+start_link_table_sup() ->
+  supervisor:start_link({local, ?TABLE_SUP}, ?MODULE, #table_sup{}).
 
--spec start_link_membership_sup(module()) -> supervisor:startlink_ret().
-start_link_membership_sup(RT) ->
-  supervisor:start_link({local, ?MEMBERSHIP_SUP}, ?MODULE, #membership_sup{rt = RT}).
+-spec start_link_membership_sup() -> supervisor:startlink_ret().
+start_link_membership_sup() ->
+  supervisor:start_link({local, ?MEMBERSHIP_SUP}, ?MODULE, #membership_sup{}).
 
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
 
-init(#top{rt = RT}) ->
-  Children = [ sup_spec(#{id => ?TABLE_SUP, start => {?MODULE, start_link_table_sup, [RT]}})
-             , sup_spec(#{id => ?MEMBERSHIP_SUP, start => {?MODULE, start_link_membership_sup, [RT]}})
+init(#top{}) ->
+  _ = classy_hook:create_table(),
+  NodeMon = #{ id       => node
+             , start    => {classy_node, start_link, []}
+             , shutdown => 5_000
+             , restart  => permanent
+             , type     => worker
+             },
+  Children = [ sup_spec(#{id => ?TABLE_SUP, start => {?MODULE, start_link_table_sup, []}})
+             , sup_spec(#{id => ?MEMBERSHIP_SUP, start => {?MODULE, start_link_membership_sup, []}})
+             , NodeMon
              ],
   SupFlags = #{ strategy      => one_for_all
               , intensity     => 10
@@ -93,9 +101,9 @@ init(#top{rt = RT}) ->
               , auto_shutdown => never
               },
   {ok, {SupFlags, Children}};
-init(#table_sup{rt = RT}) ->
+init(#table_sup{}) ->
   Children = #{ id       => worker
-              , start    => {classy_table, start_link, [RT]}
+              , start    => {classy_table, start_link, []}
               , shutdown => infinity
               , type     => worker
               , restart  => temporary
@@ -106,9 +114,9 @@ init(#table_sup{rt = RT}) ->
               , auto_shutdown => never
               },
   {ok, {SupFlags, [Children]}};
-init(#membership_sup{rt = RT}) ->
+init(#membership_sup{}) ->
   Children = #{ id       => worker
-              , start    => {classy_membership, start_link, [RT]}
+              , start    => {classy_membership, start_link, []}
               , shutdown => 5_000
               , type     => worker
               , restart  => temporary

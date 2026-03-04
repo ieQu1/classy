@@ -35,7 +35,7 @@
         ]).
 
 %% internal exports:
--export([start_link/3]).
+-export([start_link/2]).
 
 -export_type([tab/0, rec/0, options/0]).
 
@@ -139,30 +139,28 @@ lookup(Tab, Key) ->
 %% Internal exports
 %%================================================================================
 
--spec start_link(module(), tab(), options()) -> {ok, pid()}.
-start_link(RT, Tab, Options) ->
-  gen_server:start_link(?via(Tab), ?MODULE, [RT, Tab, Options], []).
+-spec start_link(tab(), options()) -> {ok, pid()}.
+start_link(Tab, Options) ->
+  gen_server:start_link(?via(Tab), ?MODULE, [Tab, Options], []).
 
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
 
 -record(s,
-        { rt :: module()
-        , name :: tab()
+        { name :: tab()
         , ets :: ets:tid()
         , dir :: file:filename()
         , dirty :: #{_ => true}
-        , log :: classy_rt:log() | undefined
+        , log :: _
         }).
 
 -type s() :: #s{}.
 
-init([RTMod, TabName, Options]) ->
+init([TabName, Options]) ->
   process_flag(trap_exit, true),
   ETSOpts = maps:get(ets_options, Options, [set]),
-  S = #s{ rt = RTMod
-        , name = TabName
+  S = #s{ name = TabName
         , ets = ets:new(TabName, [named_table, protected, {keypos, #classy_kv.k} | ETSOpts])
         , dirty = #{}
         , dir = application:get_env(classy, table_dir, ".")
@@ -204,26 +202,26 @@ terminate(_Reason, S) ->
 %%================================================================================
 
 -spec restore(s()) -> s().
-restore(S = #s{rt = RT, ets = ETS}) ->
+restore(S = #s{ets = ETS}) ->
   RegularName = log_name(S, ""),
   NewName = log_name(S, ".NEW"),
   ets:match_delete(ETS, '_'),
-  case {classy_rt:has_log(RT, RegularName), classy_rt:has_log(RT, NewName)} of
+  case {is_log(RegularName), is_log(NewName)} of
     {false, false} ->
-      {ok, Log} = classy_rt:open_log(RT, RegularName, read_write),
+      {ok, Log} = open_log(RegularName, read_write),
       S#s{log = Log};
     {true, false} ->
       %% Normal case:
-      {ok, Log} = classy_rt:open_log(RT, RegularName, read_write),
-      do_restore(RT, Log, start, ETS),
+      {ok, Log} = open_log(RegularName, read_write),
+      do_restore(Log, start, ETS),
       S#s{log = Log};
     _ ->
       %% TODO: handle aborted checkpoint
       error(todo)
   end.
 
-do_restore(RT, Log, Cont0, ETS) ->
-  case classy_rt:log_chunk(RT, Log, Cont0, batch_size()) of
+do_restore(Log, Cont0, ETS) ->
+  case read_log_chunk(Log, Cont0, batch_size()) of
     {ok, Cont, Chunk} ->
       lists:foreach(
         fun(?w(K, V)) ->
@@ -232,7 +230,7 @@ do_restore(RT, Log, Cont0, ETS) ->
             ets:delete(ETS, K)
         end,
         Chunk),
-      do_restore(RT, Log, Cont, ETS);
+      do_restore(Log, Cont, ETS);
     eof ->
       ok
   end.
@@ -242,16 +240,16 @@ log_name(#s{name = Name, dir = Dir}, Suffix) ->
   FN = atom_to_list(Name) ++ Suffix,
   filename:join(Dir, FN).
 
-handle_write(#call_write{k = K, v = V, wal = true}, S = #s{rt = RT, ets = ETS, log = Log, dirty = D}) ->
-  ok = classy_rt:log_write(RT, Log, [?w(K, V)]),
+handle_write(#call_write{k = K, v = V, wal = true}, S = #s{ets = ETS, log = Log, dirty = D}) ->
+  ok = write_log(Log, [?w(K, V)]),
   ets:insert(ETS, #classy_kv{k = K, v = V}),
   S#s{dirty = maps:remove(K, D)};
 handle_write(#call_write{k = K, v = V, wal = false}, S = #s{ets = ETS, dirty = D}) ->
   ets:insert(ETS, #classy_kv{k = K, v = V}),
   S#s{dirty = D#{K => true}}.
 
-handle_delete(#call_delete{k = K, wal = true}, S = #s{rt = RT, ets = ETS, log = Log, dirty = D}) ->
-  ok = classy_rt:log_write(RT, Log, [?d(K)]),
+handle_delete(#call_delete{k = K, wal = true}, S = #s{ets = ETS, log = Log, dirty = D}) ->
+  ok = write_log(Log, [?d(K)]),
   ets:delete(ETS, K),
   S#s{dirty = maps:remove(K, D)};
 handle_delete(#call_delete{k = K, wal = false}, S = #s{ets = ETS, dirty = D}) ->
@@ -261,7 +259,7 @@ handle_delete(#call_delete{k = K, wal = false}, S = #s{ets = ETS, dirty = D}) ->
 handle_flush(S = #s{log = Log, dirty = Dirty}) when Log =:= undefined;
                                                     map_size(Dirty) =:= 0 ->
   S;
-handle_flush(S = #s{rt = RT, ets = ETS, log = Log, dirty = Dirty}) ->
+handle_flush(S = #s{ets = ETS, log = Log, dirty = Dirty}) ->
   Ops = maps:fold(
           fun(K, _, Acc) ->
               case ets:lookup(ETS, K) of
@@ -273,37 +271,36 @@ handle_flush(S = #s{rt = RT, ets = ETS, log = Log, dirty = Dirty}) ->
           end,
           [],
           Dirty),
-  ok = classy_rt:log_write(RT, Log, Ops),
+  ok = write_log(Log, Ops),
   S#s{dirty = #{}}.
 
-handle_checkpoint(From, S0 = #s{rt = RT}) ->
+handle_checkpoint(From, S0 = #s{}) ->
   S1 = #s{log = Old} = handle_flush(S0),
-  ok = classy_rt:close_log(RT, Old),
+  ok = close_log(Old),
   S = S1#s{log = undefined},
   {noreply, S, {continue, {checkpoint2, From}}}.
 
-handle_checkpoint2(From, S = #s{rt = RT, ets = Ets}) ->
+handle_checkpoint2(From, S = #s{ets = Ets}) ->
   NewName = log_name(S, ".NEW"),
   OldName = log_name(S, ""),
-  {ok, Log} = classy_rt:open_log(RT, NewName, read_write),
+  {ok, Log} = open_log(NewName, read_write),
   ok = do_checkpoint(
-         RT,
          Log,
          ets:match(Ets, '$1', batch_size())),
   ok = rename_log(NewName, OldName),
   gen_server:reply(From, ok),
   S#s{log = Log, dirty = #{}}.
 
-do_checkpoint(_RT, _Log, '$end_of_table') ->
+do_checkpoint(_Log, '$end_of_table') ->
   ok;
-do_checkpoint(RT, Log, {Batch, Cont}) ->
+do_checkpoint(Log, {Batch, Cont}) ->
   Recs = lists:map(
            fun([#classy_kv{k = K, v = V}]) ->
                ?w(K, V)
            end,
            Batch),
-  ok = classy_rt:log_write(RT, Log, Recs),
-  do_checkpoint(RT, Log, ets:match(Cont)).
+  ok = write_log(Log, Recs),
+  do_checkpoint(Log, ets:match(Cont)).
 
 batch_size() ->
   application:get_env(classy, table_batch_size, 1000).
@@ -311,4 +308,45 @@ batch_size() ->
 -ifndef(CONCUERROR).
 rename_log(From, To) ->
   file:rename(From, To).
+
+is_log(Filename) ->
+  filelib:is_file(Filename).
+
+open_log(Filename, Mode) ->
+  Opts = [ {name, Filename}
+         , {file, Filename}
+         , {mode, Mode}
+         , {format, internal}
+         , {type, halt}
+         , {repair, true}
+         , {notify, false}
+         ],
+  case disk_log:open(Opts) of
+    {ok, Log} ->
+      {ok, Log};
+    {repaired, Log, _Recovered, _BadBytes} ->
+      {ok, Log};
+    {error, Reason} ->
+      {error, Reason}
+  end.
+
+close_log(Log) ->
+  disk_log:close(Log).
+
+write_log(Log, Terms) ->
+  disk_log:log_terms(Log, Terms).
+
+read_log_chunk(Log, Cont, Size) ->
+  case disk_log:chunk(Log, Cont, Size) of
+    {error, _} = Err ->
+      Err;
+    {NewCont, Terms} ->
+      {ok, NewCont, Terms};
+    {NewCont, Terms, _BadBytes} ->
+      %% In case of corrupt data in read-only mode, we still return what we can
+      {ok, NewCont, Terms};
+    eof ->
+      eof
+  end.
+
 -endif.

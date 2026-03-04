@@ -11,7 +11,7 @@
 -behavior(gen_server).
 
 %% API:
--export([join/3, kick/3, members/2]).
+-export([join/3, kick/3, members/2, list_local_sites/1]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -34,30 +34,34 @@
 -define(via(CLUSTER, SITE), {via, gproc, ?name(CLUSTER, SITE)}).
 
 -type start_args() ::
-        #{ module  := module()
-         , cluster := classy:cluster_id()
+        #{ cluster := classy:cluster_id()
          , site    := classy:site()
          }.
 
 -type clock() :: non_neg_integer().
 
+-type site_prop() :: mem   %% Is member?
+                   | host. %% Which node hosts the site
+
 %% Arbitrary term used to break ties between commands with the same logical timestamp.
 -type magic() :: term().
 
-%% The following command is used to set membership state of `target` site:
+%% The following command is used to update status of `target' site:
 -record(op_set,
         { %% Site that issued the command:
           origin :: classy:site()
           %% Site which is being updated:
         , target :: classy:site()
-          %% c[target, origin]:
+          %% Property of the target site that is being updated:
+        , k :: site_prop()
+          %% Logical time at `origin' when it issued the command:
         , c :: clock()
           %% This term can be used to break ties:
         , m :: magic()
-          %% Is member?
-        , mem :: boolean()
+          %% Updated value:
+        , val :: term()
           %% Origin's wall time when the update was made. This value
-          %% isn't used by this module directly, but it gives hint to
+          %% isn't used by this module directly, but it gives hints to
           %% the autoclean:
         , owt :: integer()
         }).
@@ -90,8 +94,6 @@
           cluster :: classy:cluster_id()
           %% Local site id:
         , site :: classy:site()
-          %% Runtime callback module:
-        , cbm :: module()
         , sync_timer :: undefined | reference()
           %% Logical clock:
         , clock :: clock()
@@ -106,8 +108,8 @@
 -record(pk_last, {c, l, r}).
 -type pk_last() :: #pk_last{c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}.
 
--record(pv_last, {op, mem, tou}).
--type pv_last() :: #pv_last{op :: op(), mem :: boolean(), tou :: clock()}.
+-record(pv_last, {op, mem, tou, hooks_ran = false}).
+-type pv_last() :: #pv_last{op :: op(), mem :: boolean(), tou :: clock(), hooks_ran :: boolean()}.
 
 %%================================================================================
 %% API functions
@@ -128,12 +130,10 @@ join(Cluster, Local, Target) ->
     EC:Err -> {error, {EC, Err}}
   end.
 
--doc """
-Low-level call that sets `Target`'s membership state to `false`.
-
-Note: kicking the site doesn't erase information about it.
-Nodes will continue to propagate a record saying that target site is not part of the cluster.
-""".
+%% @doc Low-level call that sets `Target`'s membership state to `false`.
+%%
+%% WARNING: kicking the site doesn't erase information about it.
+%% Nodes will continue to propagate a record saying that target site is not part of the cluster.
 -spec kick(classy:cluster_id(), classy:site(), classy:site()) -> ok.
 kick(Cluster, Local, Target) ->
   try
@@ -142,14 +142,12 @@ kick(Cluster, Local, Target) ->
     EC:Err -> {error, {EC, Err}}
   end.
 
--doc """
-Return active members of the `Cluster`,
-as perceived by `Local` site.
-
-WARNING: if `Local` is not a member of the returned list,
-then the local system may be permanently out of sync with the `Cluster` or `{Cluster,Local}` server may be inactive.
-In both cases the result value can't be trusted.
-""".
+%% @doc Return active members of the `Cluster`,
+%% as perceived by `Local` site.
+%%
+%% WARNING: if `Local` is not a member of the returned list,
+%% then the local system may be permanently out of sync with the `Cluster` or `{Cluster,Local}` server may be inactive.
+%% In both cases the result value can't be trusted.
 -spec members(classy:cluster_id(), classy:site()) -> [classy:site()].
 members(Cluster, Local) ->
   MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1'}
@@ -161,12 +159,26 @@ members(Cluster, Local) ->
        },
   ets:select(?ptab, [MS]).
 
+-spec list_local_sites(running | all) -> [{classy:cluster_id(), classy:site()}].
+list_local_sites(running) ->
+  MS = {{?name('$1', '$2'), '_', '_'}, [], [{{'$1', '$2'}}]},
+  gproc:select({local, names}, [MS]);
+list_local_sites(all) ->
+  %% Every local site has a logical clock:
+  MS = { #classy_kv{ k = #pk_clock{c = '$1', s = '$2'}
+                   , _ = '_'
+                   }
+       , []
+       , [{{'$1', '$2'}}]
+       },
+  ets:select(?ptab, [MS]).
+
 %%================================================================================
 %% Internal exports
 %%================================================================================
 
 -spec start_link(start_args()) -> {ok, pid()}.
-start_link(Args = #{module := CBM, cluster := Cluster, site := Local}) when is_atom(CBM) ->
+start_link(Args = #{cluster := Cluster, site := Local}) ->
   gen_server:start_link(?via(Cluster, Local), ?MODULE, Args, []).
 
 %%================================================================================
@@ -174,7 +186,7 @@ start_link(Args = #{module := CBM, cluster := Cluster, site := Local}) when is_a
 %%================================================================================
 
 -spec init(start_args()) -> {ok, #s{}}.
-init(#{module := CBM, cluster := Cluster, site := Site}) ->
+init(#{cluster := Cluster, site := Site}) ->
   process_flag(trap_exit, true),
   ok = classy_table:open(?ptab, #{}),
   case classy_table:lookup(?ptab, #pk_clock{c = Cluster, s = Site}) of
@@ -183,7 +195,6 @@ init(#{module := CBM, cluster := Cluster, site := Site}) ->
   end,
   S = #s{ cluster = Cluster
         , site = Site
-        , cbm = CBM
         , clock = Clock
         },
   {ok, need_sync(0, S)}.
@@ -197,17 +208,21 @@ handle_call(#call_kick{target = Target}, _From, S0) ->
 handle_call(_Call, _From, S) ->
   {reply, {error, unknown_call}, S}.
 
-handle_cast(#cast_sync{} = Req, S) ->
-  {noreply, handle_sync_in(Req, S)};
+handle_cast(#cast_sync{} = Req, S0) ->
+  S = handle_sync_in(Req, S0),
+  run_hooks(S),
+  {noreply, S};
 handle_cast(_Cast, S) ->
   {noreply, S}.
 
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
 handle_info(#to_sync_out{}, S0) ->
-  S = S0#s{sync_timer = undefined},
+  S1 = S0#s{sync_timer = undefined},
   ok = classy_table:flush(?ptab),
-  {noreply, handle_sync_out(S)};
+  S = handle_sync_out(S1),
+  run_hooks(S),
+  {noreply, S};
 handle_info(_Info, S) ->
   {noreply, S}.
 
@@ -218,39 +233,38 @@ terminate(_Reason, #s{}) ->
 %% Internal functions
 %%================================================================================
 
--doc """
-Total order of the operation.
 
-Note that this total order is *not* strictly causal,
-because Lamport clocks don't provide such guarantee.
-
-Practically, lack of strict causality means the cluster will eventually converge to the same state,
-but earlier join/leave commands may override later commands.
-
-These adverse side effects can be observed when conflicting commands are issued on different nodes faster than the nodes sync with each other.
-This is most likely to happen during a network partition.
-
-Please see `theories/classy.v` for more details and some intricate requirements for `ord` function.
-""".
+%% @doc Total order of the operation.
+%%
+%% Note that this total order is *not* strictly causal,
+%% because Lamport clocks don't provide such guarantee.
+%%
+%% Practically, lack of strict causality means the cluster will eventually converge to the same state,
+%% but earlier join/leave commands may override later commands.
+%%
+%% These adverse side effects can be observed when conflicting commands are issued on different nodes faster than the nodes sync with each other.
+%% This is most likely to happen during a network partition.
+%%
+%% Please see `theories/classy.v` for more details and some intricate requirements for `ord` function.
 -spec ord(op()) -> ord().
 ord(#op_set{c = C, m = M, origin = O}) ->
   {C, M, O}.
 
 -spec state(op()) -> boolean().
-state(#op_set{mem = Mem}) ->
+state(#op_set{val = Mem}) ->
   Mem.
 
 -spec local_command(join | kick, classy:site(), #s{}) -> #s{}.
-local_command(Cmd, Target, S0 = #s{cbm = CBM, site = Local}) ->
+local_command(Cmd, Target, S0 = #s{site = Local}) ->
   {C, S} = inc_get_clock(S0),
   Op = #op_set{ origin = Local
               , target = Target
               , c = C
-              , mem = case Cmd of
+              , val = case Cmd of
                         join -> true;
                         kick -> false
                       end
-              , owt = classy_rt:time_s(CBM)
+              , owt = time_s()
               },
   _ = merge(C, Op, S),
   need_sync(S).
@@ -279,10 +293,10 @@ handle_sync_in(Req, S0) ->
   end.
 
 -spec handle_sync_out(#s{}) -> #s{}.
-handle_sync_out(S = #s{cbm = CBM, cluster = Cluster, site = Local, clock = C}) ->
+handle_sync_out(S = #s{cluster = Cluster, site = Local, clock = C}) ->
   lists:foreach(
-    fun(Site) ->
-        case classy_rt:get_membership_pid(CBM, Cluster, Site) of
+    fun({Site, _IsMember}) ->
+        case get_membership_pid(Cluster, Site) of
           Pid when is_pid(Pid) ->
             Since = get_acked_out(Site, S),
             Data = memtab_since(Since, S),
@@ -317,6 +331,20 @@ merge(LTime, Op, S) ->
       set_last(LTime, Op, S),
       true
   end.
+
+run_hooks(S = #s{cluster = Cluster, site = Local}) ->
+  lists:foreach(
+    fun(Peer) ->
+        K = #pk_last{c = Cluster, l = Local, r = Peer},
+        case classy_table:lookup(?ptab, K) of
+          [#pv_last{hooks_ran = true}] ->
+            ok;
+          [#pv_last{mem = IsMember, hooks_ran = false} = V] ->
+            classy_hook:foreach(membership_change, [Cluster, Local, Peer, IsMember]),
+            classy_table:dirty_write(?ptab, K, V#pv_last{hooks_ran = true})
+        end
+    end,
+    peers(S)).
 
 %%--------------------------------------------------------------------------------
 %% Interface for site state storage
@@ -388,19 +416,15 @@ save_clock(#s{cluster = Cluster, site = Local, clock = Clock}) ->
 %% Functions related to the p2p protocol
 %%--------------------------------------------------------------------------------
 
--doc """
-Schedule sync with the peers after the default timeout.
-""".
+%% Schedule sync with the peers after the default timeout.
 -spec need_sync(#s{}) -> #s{}.
 need_sync(S) ->
   need_sync(
     application:get_env(classy, sync_timeout, ?default_sync_timeout),
     S).
 
--doc """
-Schedule sync with the peers after a specified timeout.
-This call has no effect if the sync is already scheduled.
-""".
+%% Schedule sync with the peers after a specified timeout.
+%% This call has no effect if the sync is already scheduled.
 -spec need_sync(non_neg_integer(), #s{}) -> #s{}.
 need_sync(_Timeout, S = #s{sync_timer = R}) when is_reference(R) ->
   S;
@@ -435,3 +459,14 @@ set_acked_out(Site, Clock, #s{cluster = Cluster, site = Local}) ->
     ?ptab,
     #pk_acked_out{c = Cluster, l = Local, r = Site},
     Clock).
+
+-ifndef(CONCUERROR).
+
+time_s() ->
+  os:system_time(second).
+
+get_membership_pid(_Cluster, _Site) ->
+  %% TODO:
+  undefined.
+
+-endif.
