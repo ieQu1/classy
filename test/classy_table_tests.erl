@@ -57,9 +57,9 @@ smoke_restore_test() ->
     setup(?FUNCTION_NAME),
     ?assertEqual(ok, classy_table:open(t, #{})),
     %% Set `foo' to 1000:
-    [?assertEqual(ok, classy_table:dirty_write(t, foo, N)) || N <- lists:seq(1, 1000)],
+    [?assertEqual(ok, classy_table:dirty_write(t, foo, N)) || N <- lists:seq(1, 100)],
     %% Set `bar' to 1000:
-    [?assertEqual(ok, classy_table:write(t, bar, N)) || N <- lists:seq(1, 1000)],
+    [?assertEqual(ok, classy_table:write(t, bar, N)) || N <- lists:seq(1, 100)],
     %% Delete `baz' after setting it:
     ?assertEqual(ok, classy_table:dirty_write(t, baz, 1)),
     ?assertEqual(ok, classy_table:delete(t, baz)),
@@ -67,9 +67,26 @@ smoke_restore_test() ->
     ?assertEqual(ok, classy_table:stop(t, infinity)),
     ?assertEqual(ok, classy_table:open(t, #{})),
     %% Check values:
-    ?assertEqual([1000], classy_table:lookup(t, foo)),
-    ?assertEqual([1000], classy_table:lookup(t, bar)),
+    ?assertEqual([100], classy_table:lookup(t, foo)),
+    ?assertEqual([100], classy_table:lookup(t, bar)),
     ?assertEqual([], classy_table:lookup(t, baz))
+  after
+    cleanup(?FUNCTION_NAME)
+  end.
+
+%% This test verifies snapshot restoration.
+smoke_snapshot_test() ->
+  try
+    setup(?FUNCTION_NAME),
+    %% Insert data:
+    ?assertEqual(ok, classy_table:open(t, #{})),
+    [?assertEqual(ok, classy_table:dirty_write(t, N, N)) || N <- lists:seq(1, 100)],
+    %% Checkpoint and reopen table:
+    ?assertEqual(ok, classy_table:checkpoint(t)),
+    ?assertEqual(ok, classy_table:stop(t, infinity)),
+    ?assertEqual(ok, classy_table:open(t, #{})),
+    %% Verify data:
+    [?assertEqual([N], classy_table:lookup(t, N)) || N <- lists:seq(1, 100)]
   after
     cleanup(?FUNCTION_NAME)
   end.
@@ -81,6 +98,7 @@ smoke_restore_test() ->
 setup(FunctionName) ->
   Dir = dir(FunctionName),
   application:set_env(classy, table_dir, Dir),
+  application:set_env(classy, table_batch_size, 10),
   filelib:ensure_path(Dir),
   application:ensure_all_started(classy).
 
@@ -89,4 +107,4 @@ cleanup(FunctionName) ->
   application:stop(classy).
 
 dir(FunctionName) ->
-  filename:join("test_data", atom_to_list(FunctionName)).
+  filename:join("_build/test_data", atom_to_list(FunctionName)).

@@ -1,18 +1,17 @@
 %%--------------------------------------------------------------------
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
--module(classy_membership).
--moduledoc """
-# Cluster Membership CRDT
 
-This module provides low-level API for maintaining and updating cluster membership information.
-Business code should not use it directly.
-""".
+%% @doc Cluster Membership CRDT
+%%
+%% This module provides low-level API for maintaining and updating cluster membership information.
+%% Business code should not use it directly.
+-module(classy_membership).
 
 -behavior(gen_server).
 
 %% API:
--export([join/4, kick/4, members/2]).
+-export([join/3, kick/3, members/2]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -42,14 +41,10 @@ Business code should not use it directly.
 
 -type clock() :: non_neg_integer().
 
--doc """
-Arbitrary term used to break ties between commands with the same logical timestamp.
-""".
+%% Arbitrary term used to break ties between commands with the same logical timestamp.
 -type magic() :: term().
 
--doc """
-The following command is used to set membership state of `target` site.
-""".
+%% The following command is used to set membership state of `target` site:
 -record(op_set,
         { %% Site that issued the command:
           origin :: classy:site()
@@ -69,9 +64,7 @@ The following command is used to set membership state of `target` site.
 
 -type op() :: #op_set{}.
 
--doc """
-Projection of `op()` fields used to establish total order of logs.
-""".
+%% Projection of `op()` fields used to establish total order of logs.
 -type ord() :: {clock(), magic(), classy:site()}.
 
 %% `site' sends a portion of its logs that is newer than `since':
@@ -84,7 +77,7 @@ Projection of `op()` fields used to establish total order of logs.
         , data :: [op()]
         }).
 
--doc "Timeout message triggering syncing out state.".
+%% Timeout message triggering syncing out state
 -record(to_sync_out, {}).
 
 -record(call_join, {target :: classy:site()}).
@@ -120,17 +113,15 @@ Projection of `op()` fields used to establish total order of logs.
 %% API functions
 %%================================================================================
 
--doc """
-Low-level call that sets `Target`'s membership state to `true`.
-
-WARNING: this function does not check if target site exists and/or is part of cluster.
-When called with invalid `Target`,
-it will create a new entry that will eventually make its way to the entire cluster.
-This fictitious site will exist in `down` state until kicked,
-and even then some records about it may be kept around.
-""".
--spec join(module(), classy:cluster_id(), classy:site(), classy:site()) -> ok | {error, _}.
-join(CBM, Cluster, Local, Target) ->
+%% Low-level call that sets `Target''s membership state to `true'.
+%%
+%% WARNING: this function does not check if target site exists and/or is part of cluster.
+%% When called with invalid `Target',
+%% it will create a new entry that will eventually make its way to the entire cluster.
+%% This fictitious site will exist in `down` state until kicked,
+%% and even then some records about it may be kept around.
+-spec join(classy:cluster_id(), classy:site(), classy:site()) -> ok | {error, _}.
+join(Cluster, Local, Target) ->
   try
     gen_server:call(?via(Cluster, Local), #call_join{target = Target})
   catch
@@ -143,8 +134,8 @@ Low-level call that sets `Target`'s membership state to `false`.
 Note: kicking the site doesn't erase information about it.
 Nodes will continue to propagate a record saying that target site is not part of the cluster.
 """.
--spec kick(module(), classy:cluster_id(), classy:site(), classy:site()) -> ok.
-kick(CBM, Cluster, Local, Target) ->
+-spec kick(classy:cluster_id(), classy:site(), classy:site()) -> ok.
+kick(Cluster, Local, Target) ->
   try
     gen_server:call(?via(Cluster, Local), #call_kick{target = Target})
   catch

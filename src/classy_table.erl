@@ -7,6 +7,8 @@
 %%
 %% It is used to persistently save classy's own data.
 %% Other applications can also use it for data that doesn't require replication and is not written too frequently.
+%%
+%% It is meant for small volumes of data and infrequent updates.
 -module(classy_table).
 
 -behavior(gen_server).
@@ -51,8 +53,8 @@
 -type options() :: #{}.
 
 -type rec() :: #classy_kv{ k :: term()
-                             , v :: term()
-                             }.
+                         , v :: term()
+                         }.
 
 -record(call_ensure_open, {tab :: tab()}).
 -record(call_write, {k, v, wal = true :: boolean()}).
@@ -72,7 +74,7 @@
 %%
 %% Note: this function is idempotent.
 -spec open(tab(), options()) -> ok | {error, _}.
-open(Tab, Options) ->
+open(Tab, Options) when is_atom(Tab), is_map(Options) ->
   case classy_sup:start_table(Tab, Options) of
     {ok, Pid} ->
       gen_server:call(Pid, #call_ensure_open{tab = Tab}, infinity);
@@ -168,7 +170,9 @@ init([RTMod, TabName, Options]) ->
   {ok, S, {continue, restore}}.
 
 handle_continue(restore, S) ->
-  {noreply, restore(S)}.
+  {noreply, restore(S)};
+handle_continue({checkpoint2, From}, S) ->
+  {noreply, handle_checkpoint2(From, S)}.
 
 handle_call(#call_ensure_open{}, _From, S) ->
   {reply, ok, S};
@@ -178,6 +182,8 @@ handle_call(#call_delete{} = C, _From, S) ->
   {reply, ok, handle_delete(C, S)};
 handle_call(#call_flush{}, _From, S) ->
   {reply, ok, handle_flush(S)};
+handle_call(#call_checkpoint{}, From, S) ->
+  handle_checkpoint(From, S);
 handle_call(_Call, _From, S) ->
   {reply, {error, unknown_call}, S}.
 
@@ -217,7 +223,7 @@ restore(S = #s{rt = RT, ets = ETS}) ->
   end.
 
 do_restore(RT, Log, Cont0, ETS) ->
-  case classy_rt:log_chunk(RT, Log, Cont0, 100) of
+  case classy_rt:log_chunk(RT, Log, Cont0, batch_size()) of
     {ok, Cont, Chunk} ->
       lists:foreach(
         fun(?w(K, V)) ->
@@ -236,23 +242,24 @@ log_name(#s{name = Name, dir = Dir}, Suffix) ->
   FN = atom_to_list(Name) ++ Suffix,
   filename:join(Dir, FN).
 
-handle_write(#call_write{k = K, v = V, wal = true}, S = #s{rt = RT, ets = ETS, log = Log}) ->
+handle_write(#call_write{k = K, v = V, wal = true}, S = #s{rt = RT, ets = ETS, log = Log, dirty = D}) ->
   ok = classy_rt:log_write(RT, Log, [?w(K, V)]),
   ets:insert(ETS, #classy_kv{k = K, v = V}),
-  S;
-handle_write(#call_write{k = K, v = V, wal = false}, S = #s{ets = ETS, dirty = D0}) ->
+  S#s{dirty = maps:remove(K, D)};
+handle_write(#call_write{k = K, v = V, wal = false}, S = #s{ets = ETS, dirty = D}) ->
   ets:insert(ETS, #classy_kv{k = K, v = V}),
-  S#s{dirty = D0#{K => true}}.
+  S#s{dirty = D#{K => true}}.
 
-handle_delete(#call_delete{k = K, wal = true}, S = #s{rt = RT, ets = ETS, log = Log}) ->
+handle_delete(#call_delete{k = K, wal = true}, S = #s{rt = RT, ets = ETS, log = Log, dirty = D}) ->
   ok = classy_rt:log_write(RT, Log, [?d(K)]),
   ets:delete(ETS, K),
-  S;
-handle_delete(#call_delete{k = K, wal = false}, S = #s{ets = ETS, dirty = D0}) ->
+  S#s{dirty = maps:remove(K, D)};
+handle_delete(#call_delete{k = K, wal = false}, S = #s{ets = ETS, dirty = D}) ->
   ets:delete(ETS, K),
-  S#s{dirty = D0#{K => true}}.
+  S#s{dirty = D#{K => true}}.
 
-handle_flush(S = #s{dirty = Dirty}) when map_size(Dirty) =:= 0 ->
+handle_flush(S = #s{log = Log, dirty = Dirty}) when Log =:= undefined;
+                                                    map_size(Dirty) =:= 0 ->
   S;
 handle_flush(S = #s{rt = RT, ets = ETS, log = Log, dirty = Dirty}) ->
   Ops = maps:fold(
@@ -268,3 +275,40 @@ handle_flush(S = #s{rt = RT, ets = ETS, log = Log, dirty = Dirty}) ->
           Dirty),
   ok = classy_rt:log_write(RT, Log, Ops),
   S#s{dirty = #{}}.
+
+handle_checkpoint(From, S0 = #s{rt = RT}) ->
+  S1 = #s{log = Old} = handle_flush(S0),
+  ok = classy_rt:close_log(RT, Old),
+  S = S1#s{log = undefined},
+  {noreply, S, {continue, {checkpoint2, From}}}.
+
+handle_checkpoint2(From, S = #s{rt = RT, ets = Ets}) ->
+  NewName = log_name(S, ".NEW"),
+  OldName = log_name(S, ""),
+  {ok, Log} = classy_rt:open_log(RT, NewName, read_write),
+  ok = do_checkpoint(
+         RT,
+         Log,
+         ets:match(Ets, '$1', batch_size())),
+  ok = rename_log(NewName, OldName),
+  gen_server:reply(From, ok),
+  S#s{log = Log, dirty = #{}}.
+
+do_checkpoint(_RT, _Log, '$end_of_table') ->
+  ok;
+do_checkpoint(RT, Log, {Batch, Cont}) ->
+  Recs = lists:map(
+           fun([#classy_kv{k = K, v = V}]) ->
+               ?w(K, V)
+           end,
+           Batch),
+  ok = classy_rt:log_write(RT, Log, Recs),
+  do_checkpoint(RT, Log, ets:match(Cont)).
+
+batch_size() ->
+  application:get_env(classy, table_batch_size, 1000).
+
+-ifndef(CONCUERROR).
+rename_log(From, To) ->
+  file:rename(From, To).
+-endif.

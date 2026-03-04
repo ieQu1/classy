@@ -96,7 +96,7 @@ init(#top{rt = RT}) ->
 init(#table_sup{rt = RT}) ->
   Children = #{ id       => worker
               , start    => {classy_table, start_link, [RT]}
-              , shutdown => 5_000
+              , shutdown => infinity
               , type     => worker
               , restart  => temporary
               },
