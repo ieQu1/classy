@@ -11,13 +11,13 @@
 -behavior(gen_server).
 
 %% API:
--export([join/3, kick/3, members/2, list_local_sites/1]).
+-export([set/5, members/2, list_local_sites/1]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([start_link/1]).
+-export([start_link/1, cast_sync/3]).
 
 -export_type([start_args/0, op/0, ord/0, clock/0]).
 
@@ -40,43 +40,40 @@
 
 -type clock() :: non_neg_integer().
 
--type site_prop() :: mem   %% Is member?
-                   | host. %% Which node hosts the site
+-define(mem, mem).
+-define(host, host).
+
+-type site_prop() :: ?mem   %% Is member?
+                   | ?host. %% Which node hosts the site
 
 %% Arbitrary term used to break ties between commands with the same logical timestamp.
 -type magic() :: term().
 
 %% The following command is used to update status of `target' site:
--record(op_set,
-        { %% Site that issued the command:
-          origin :: classy:site()
-          %% Site which is being updated:
-        , target :: classy:site()
-          %% Property of the target site that is being updated:
-        , k :: site_prop()
-          %% Logical time at `origin' when it issued the command:
-        , c :: clock()
-          %% This term can be used to break ties:
-        , m :: magic()
-          %% Updated value:
-        , val :: term()
-          %% Origin's wall time when the update was made. This value
-          %% isn't used by this module directly, but it gives hints to
-          %% the autoclean:
-        , owt :: integer()
-        }).
+-record(op_set, {origin, target, k, c, m, val, owt}).
 
--type op() :: #op_set{}.
+-type op() ::
+        #op_set{ origin :: classy:site() %% Site that issued the command
+               , target :: classy:site() %% Site which is being updated
+               , k :: site_prop() %% Property of the target site that is being updated
+               , c :: clock() %% Logical time at `origin' when it issued the command:
+               , m :: magic() %% This term can be used to break ties
+               , val :: term() %% Updated value
+               , owt :: integer() %% Origin's wall time when the update was made. This value
+                                  %% isn't used by this module directly, but it gives hints to
+                                  %% the autoclean:
+               }.
 
 %% Projection of `op()` fields used to establish total order of logs.
 -type ord() :: {clock(), magic(), classy:site()}.
 
 %% `site' sends a portion of its logs that is newer than `since':
 -record(cast_sync,
-        { from :: classy:site()
+        { cluster :: classy:cluster_id()
+        , from :: classy:site()
         , since :: clock()
         , acked :: clock()
-          %% c[from, from]
+          %% c
         , c :: clock()
         , data :: [op()]
         }).
@@ -84,10 +81,7 @@
 %% Timeout message triggering syncing out state
 -record(to_sync_out, {}).
 
--record(call_join, {target :: classy:site()}).
--record(call_kick, {target :: classy:site()}).
-
-%% Type of data stored in ets:
+-record(call_set, {target :: classy:site(), k :: site_prop(), v :: term()}).
 
 -record(s,
         { %% Cluster ID:
@@ -99,17 +93,16 @@
         , clock :: clock()
         }).
 
-%% pstore keys:
+%% Table keys:
 -record(pk_clock, {c :: classy:cluster_id(), s :: classy:site()}).
-
 -record(pk_acked_in, {c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}).
 -record(pk_acked_out, {c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}).
+-record(pk_last, {c, l, r, k}).
+-type pk_last() :: #pk_last{c :: classy:cluster_id(), l :: classy:site(), r :: classy:site(), k :: site_prop()}.
 
--record(pk_last, {c, l, r}).
--type pk_last() :: #pk_last{c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}.
-
--record(pv_last, {op, mem, tou, hooks_ran = false}).
--type pv_last() :: #pv_last{op :: op(), mem :: boolean(), tou :: clock(), hooks_ran :: boolean()}.
+%% Composite table values:
+-record(pv_last, {op, tou, hooks_ran = false}).
+-type pv_last() :: #pv_last{op :: op(), tou :: clock(), hooks_ran :: boolean()}.
 
 %%================================================================================
 %% API functions
@@ -122,22 +115,10 @@
 %% it will create a new entry that will eventually make its way to the entire cluster.
 %% This fictitious site will exist in `down` state until kicked,
 %% and even then some records about it may be kept around.
--spec join(classy:cluster_id(), classy:site(), classy:site()) -> ok | {error, _}.
-join(Cluster, Local, Target) ->
+-spec set(classy:cluster_id(), classy:site(), classy:site(), site_prop(), _PropVal) -> ok | {error, _}.
+set(Cluster, Local, Target, K, V) ->
   try
-    gen_server:call(?via(Cluster, Local), #call_join{target = Target})
-  catch
-    EC:Err -> {error, {EC, Err}}
-  end.
-
-%% @doc Low-level call that sets `Target`'s membership state to `false`.
-%%
-%% WARNING: kicking the site doesn't erase information about it.
-%% Nodes will continue to propagate a record saying that target site is not part of the cluster.
--spec kick(classy:cluster_id(), classy:site(), classy:site()) -> ok.
-kick(Cluster, Local, Target) ->
-  try
-    gen_server:call(?via(Cluster, Local), #call_kick{target = Target})
+    gen_server:call(?via(Cluster, Local), #call_set{target = Target, k = K, v = V})
   catch
     EC:Err -> {error, {EC, Err}}
   end.
@@ -150,8 +131,8 @@ kick(Cluster, Local, Target) ->
 %% In both cases the result value can't be trusted.
 -spec members(classy:cluster_id(), classy:site()) -> [classy:site()].
 members(Cluster, Local) ->
-  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1'}
-                   , v = #pv_last{mem = true, _ = '_'}
+  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1', k = mem}
+                   , v = #pv_last{op = #op_set{val = true, _ = '_'}, _ = '_'}
                    , _ = '_'
                    }
        , []
@@ -181,6 +162,10 @@ list_local_sites(all) ->
 start_link(Args = #{cluster := Cluster, site := Local}) ->
   gen_server:start_link(?via(Cluster, Local), ?MODULE, Args, []).
 
+-spec cast_sync(classy:cluster_id(), classy:site(), #cast_sync{}) -> ok.
+cast_sync(Cluster, Site, Cast) ->
+  gen_server:cast(?via(Cluster, Site), Cast).
+
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
@@ -199,11 +184,8 @@ init(#{cluster := Cluster, site := Site}) ->
         },
   {ok, need_sync(0, S)}.
 
-handle_call(#call_join{target = Target}, _From, S0) ->
-  S = local_command(join, Target, S0),
-  {reply, ok, S};
-handle_call(#call_kick{target = Target}, _From, S0) ->
-  S = local_command(kick, Target, S0),
+handle_call(#call_set{} = CMD, _From, S0) ->
+  S = local_command(CMD, S0),
   {reply, ok, S};
 handle_call(_Call, _From, S) ->
   {reply, {error, unknown_call}, S}.
@@ -251,19 +233,17 @@ ord(#op_set{c = C, m = M, origin = O}) ->
   {C, M, O}.
 
 -spec state(op()) -> boolean().
-state(#op_set{val = Mem}) ->
-  Mem.
+state(#op_set{val = Val}) ->
+  Val.
 
--spec local_command(join | kick, classy:site(), #s{}) -> #s{}.
-local_command(Cmd, Target, S0 = #s{site = Local}) ->
+-spec local_command(#call_set{}, #s{}) -> #s{}.
+local_command(#call_set{target = Target, k = K, v = V}, S0 = #s{site = Local}) ->
   {C, S} = inc_get_clock(S0),
   Op = #op_set{ origin = Local
               , target = Target
               , c = C
-              , val = case Cmd of
-                        join -> true;
-                        kick -> false
-                      end
+              , k = K
+              , val = V
               , owt = time_s()
               },
   _ = merge(C, Op, S),
@@ -294,31 +274,29 @@ handle_sync_in(Req, S0) ->
 
 -spec handle_sync_out(#s{}) -> #s{}.
 handle_sync_out(S = #s{cluster = Cluster, site = Local, clock = C}) ->
-  lists:foreach(
-    fun({Site, _IsMember}) ->
-        case get_membership_pid(Cluster, Site) of
-          Pid when is_pid(Pid) ->
-            Since = get_acked_out(Site, S),
-            Data = memtab_since(Since, S),
-            gen_server:cast(
-              Pid,
-              #cast_sync{ from = Local
-                        , since = Since
-                        , acked = get_acked_in(Site, S)
-                        , c = C
-                        , data = Data
-                        });
-          undefined ->
-            ok
+  maps:foreach(
+    fun(Site, Node) ->
+        Since = get_acked_out(Site, S),
+        Data = memtab_since(Since, S),
+        Cast =  #cast_sync{ cluster = Cluster
+                          , from = Local
+                          , since = Since
+                          , acked = get_acked_in(Site, S)
+                          , c = C
+                          , data = Data
+                          },
+        case node() of
+          Node -> ?MODULE:cast_sync(Cluster, Site, Cast);
+          _    -> erpc:cast(Node, ?MODULE, cast_sync, [Cluster, Site, Cast])
         end
     end,
-    peers(S)),
+    sync_targets(S)),
   S.
 
 -spec merge(clock(), op(), #s{}) -> boolean().
 merge(LTime, Op, S) ->
-  #op_set{target = Site} = Op,
-  case memtab_lookup(Site, S) of
+  #op_set{target = Site, k = K} = Op,
+  case memtab_lookup(Site, K, S) of
     {ok, Op0} ->
       case ord(Op) > ord(Op0) of
         true ->
@@ -335,12 +313,12 @@ merge(LTime, Op, S) ->
 run_hooks(S = #s{cluster = Cluster, site = Local}) ->
   lists:foreach(
     fun(Peer) ->
-        K = #pk_last{c = Cluster, l = Local, r = Peer},
+        K = #pk_last{c = Cluster, l = Local, r = Peer, k = mem},
         case classy_table:lookup(?ptab, K) of
           [#pv_last{hooks_ran = true}] ->
             ok;
-          [#pv_last{mem = IsMember, hooks_ran = false} = V] ->
-            classy_hook:foreach(membership_change, [Cluster, Local, Peer, IsMember]),
+          [#pv_last{op = Op, hooks_ran = false} = V] ->
+            classy_hook:foreach(membership_change, [Cluster, Local, Peer, state(Op)]),
             classy_table:dirty_write(?ptab, K, V#pv_last{hooks_ran = true})
         end
     end,
@@ -352,15 +330,15 @@ run_hooks(S = #s{cluster = Cluster, site = Local}) ->
 
 -spec set_last(clock(), op(), #s{}) -> ok.
 set_last(LTime, Op, #s{cluster = Cluster, site = Local}) ->
-  #op_set{target = Target} = Op,
+  #op_set{target = Target, k = K} = Op,
   classy_table:dirty_write(
     ?ptab,
-    #pk_last{c = Cluster, l = Local, r = Target},
-    #pv_last{op = Op, tou = LTime, mem = state(Op)}).
+    #pk_last{c = Cluster, l = Local, r = Target, k = K},
+    #pv_last{op = Op, tou = LTime}).
 
--spec memtab_lookup(classy:site(), #s{}) -> {ok, op()} | undefined.
-memtab_lookup(Site, #s{cluster = Cluster, site = Local}) ->
-  case classy_table:lookup(?ptab, #pk_last{c = Cluster, l = Local, r = Site}) of
+-spec memtab_lookup(classy:site(), site_prop(), #s{}) -> {ok, op()} | undefined.
+memtab_lookup(Site, K, #s{cluster = Cluster, site = Local}) ->
+  case classy_table:lookup(?ptab, #pk_last{c = Cluster, l = Local, r = Site, k = K}) of
     [#pv_last{op = Op}] ->
       {ok, Op};
     [] ->
@@ -380,13 +358,24 @@ memtab_since(Since, #s{cluster = Cluster, site = Local}) ->
 
 -spec peers(#s{}) -> [classy:site()].
 peers(#s{cluster = Cluster, site = Local}) ->
-  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1'}
+  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1', k = ?mem}
                    , _ = '_'
                    }
        , []
        , ['$1']
        },
   ets:select(?ptab, [MS]).
+
+-spec nodes_of_cluster(classy:cluster_id(), classy:site()) -> #{classy:site() => node()}.
+nodes_of_cluster(Cluster, Local) ->
+  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1', k = ?host}
+                   , v = #pv_last{op = #op_set{val = '$2', _ = '_'}, _ = '_'}
+                   , _ = '_'
+                   }
+       , []
+       , [{{'$1', '$2'}}]
+       },
+  maps:from_list(ets:select(?ptab, [MS])).
 
 %%--------------------------------------------------------------------------------
 %% Logical clocks
@@ -452,7 +441,6 @@ set_acked_in(Site, Clock, #s{cluster = Cluster, site = Local}) ->
     ?ptab,
     #pk_acked_in{c = Cluster, l = Local, r = Site},
     Clock).
-
 -spec set_acked_out(classy:site(), clock(), #s{}) -> ok.
 set_acked_out(Site, Clock, #s{cluster = Cluster, site = Local}) ->
   classy_table:dirty_write(
@@ -460,13 +448,15 @@ set_acked_out(Site, Clock, #s{cluster = Cluster, site = Local}) ->
     #pk_acked_out{c = Cluster, l = Local, r = Site},
     Clock).
 
+sync_targets(#s{cluster = Cluster, site = Local}) ->
+  maps:merge(
+    nodes_of_cluster(Cluster, Local),
+    classy_node:nodes_of_cluster(Cluster)
+   ).
+
 -ifndef(CONCUERROR).
 
 time_s() ->
   os:system_time(second).
-
-get_membership_pid(_Cluster, _Site) ->
-  %% TODO:
-  undefined.
 
 -endif.
