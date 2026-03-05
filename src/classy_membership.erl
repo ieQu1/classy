@@ -23,6 +23,10 @@
 
 -include("classy_internal.hrl").
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 %%================================================================================
 %% Type declarations
 %%================================================================================
@@ -366,8 +370,8 @@ peers(#s{cluster = Cluster, site = Local}) ->
        },
   ets:select(?ptab, [MS]).
 
--spec nodes_of_cluster(classy:cluster_id(), classy:site()) -> #{classy:site() => node()}.
-nodes_of_cluster(Cluster, Local) ->
+-spec nodes_of_cluster(#s{}) -> #{classy:site() => node()}.
+nodes_of_cluster(#s{cluster = Cluster, site = Local}) ->
   MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1', k = ?host}
                    , v = #pv_last{op = #op_set{val = '$2', _ = '_'}, _ = '_'}
                    , _ = '_'
@@ -448,9 +452,9 @@ set_acked_out(Site, Clock, #s{cluster = Cluster, site = Local}) ->
     #pk_acked_out{c = Cluster, l = Local, r = Site},
     Clock).
 
-sync_targets(#s{cluster = Cluster, site = Local}) ->
+sync_targets(S = #s{cluster = Cluster}) ->
   maps:merge(
-    nodes_of_cluster(Cluster, Local),
+    nodes_of_cluster(S),
     classy_node:nodes_of_cluster(Cluster)
    ).
 
@@ -458,5 +462,83 @@ sync_targets(#s{cluster = Cluster, site = Local}) ->
 
 time_s() ->
   os:system_time(second).
+
+-endif.
+
+%%--------------------------------------------------------------------------------
+%% Unit tests
+%%--------------------------------------------------------------------------------
+
+-ifdef(TEST).
+
+table_scans_test() ->
+  Cleanup = classy_table_tests:setup(?FUNCTION_NAME),
+  S1 = #s{cluster = <<"c1">>, site = <<"s1">>},
+  S2 = #s{cluster = <<"c2">>, site = <<"s2">>},
+  try
+    classy_table:open(?ptab, #{}),
+    [begin
+       true = merge(
+                0,
+                #op_set{ origin = <<"s1">>
+                       , target = <<"s1">>
+                       , k = ?mem
+                       , val = true
+                       },
+                S),
+       true = merge(
+                0,
+                #op_set{ origin = <<"s1">>
+                       , target = <<"s1">>
+                       , k = ?host
+                       , val = 'n1@localhost'
+                       },
+                S),
+       true = merge(
+                0,
+                #op_set{ origin = <<"s1">>
+                       , target = <<"s2">>
+                       , k = ?mem
+                       , val = false
+                       },
+                S),
+       true = merge(
+                0,
+                #op_set{ origin = <<"s1">>
+                       , target = <<"s2">>
+                       , k = ?host
+                       , val = 'n2@localhost'
+                       },
+                S)
+     end || S <- [S1, S2]],
+    %% Check `peers' function:
+    [?assertEqual(
+        [<<"s1">>, <<"s2">>],
+        lists:sort(peers(S))
+       )
+     || S <- [S1, S2]],
+    %% Check `members' function:
+    ?assertEqual(
+       [<<"s1">>],
+       members(<<"c1">>, <<"s1">>)
+      ),
+    ?assertEqual(
+       [<<"s1">>],
+       members(<<"c2">>, <<"s2">>)
+      ),
+    ?assertEqual(
+       [],
+       members(<<"c1">>, <<"s2">>)
+      ),
+    %% Check `nodes_of_cluster' function:
+    [?assertEqual(
+        #{<<"s1">> => 'n1@localhost', <<"s2">> => 'n2@localhost'},
+        nodes_of_cluster(S)
+       )
+     || S <- [S1, S2]]
+  after
+    classy_table:drop(?ptab),
+    classy_table_tests:cleanup(Cleanup)
+  end.
 
 -endif.

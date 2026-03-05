@@ -16,6 +16,7 @@
 %% API:
 -export([ open/2
         , stop/2
+        , drop/1
         , write/3
         , dirty_write/3
         , delete/2
@@ -61,6 +62,7 @@
 -record(call_delete, {k, wal = true :: boolean()}).
 -record(call_flush, {}).
 -record(call_checkpoint, {}).
+-record(call_drop, {}).
 
 -define(w(K, V), {w, K, V}).
 -define(d(K), {d, K}).
@@ -131,6 +133,11 @@ flush(Tab) ->
 checkpoint(Tab) ->
   gen_server:call(?via(Tab), #call_checkpoint{}, infinity).
 
+%% @doc Drop the table (it must be open)
+-spec drop(tab()) -> ok.
+drop(Tab) ->
+  gen_server:call(?via(Tab), #call_drop{}, infinity).
+
 -spec lookup(tab(), _Key) -> [_Val].
 lookup(Tab, Key) ->
   [V || #classy_kv{v = V} <- ets:lookup(Tab, Key)].
@@ -182,6 +189,8 @@ handle_call(#call_flush{}, _From, S) ->
   {reply, ok, handle_flush(S)};
 handle_call(#call_checkpoint{}, From, S) ->
   handle_checkpoint(From, S);
+handle_call(#call_drop{}, From, S) ->
+  {stop, normal, handle_drop(From, S)};
 handle_call(_Call, _From, S) ->
   {reply, {error, unknown_call}, S}.
 
@@ -193,7 +202,9 @@ handle_info({'EXIT', _, shutdown}, S) ->
 handle_info(_Info, S) ->
   {noreply, S}.
 
-terminate(_Reason, S) ->
+terminate(_, undefined) ->
+  ok;
+terminate(_Reason, S = #s{}) ->
   handle_flush(S),
   ok.
 
@@ -302,6 +313,14 @@ do_checkpoint(Log, {Batch, Cont}) ->
   ok = write_log(Log, Recs),
   do_checkpoint(Log, ets:match(Cont)).
 
+handle_drop(From, S = #s{ets = Ets, log = Log}) ->
+  ets:delete(Ets),
+  close_log(Log),
+  file:delete(log_name(S, "")),
+  file:delete(log_name(S, ".NEW")),
+  gen_server:reply(From, ok),
+  undefined.
+
 batch_size() ->
   application:get_env(classy, table_batch_size, 1000).
 
@@ -330,6 +349,8 @@ open_log(Filename, Mode) ->
       {error, Reason}
   end.
 
+close_log(undefined) ->
+  ok;
 close_log(Log) ->
   disk_log:close(Log).
 

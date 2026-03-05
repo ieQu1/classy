@@ -3,6 +3,8 @@
 %%--------------------------------------------------------------------
 -module(classy_table_tests).
 
+-export([setup/1, cleanup/1]).
+
 -include_lib("eunit/include/eunit.hrl").
 
 %%================================================================================
@@ -11,8 +13,8 @@
 
 %% This test verifies idempotency of `open' and `stop' functions.
 smoke_open_test() ->
+  Clean = setup(?FUNCTION_NAME),
   try
-    setup(?FUNCTION_NAME),
     ?assertEqual(ok, classy_table:open(t, #{})),
     ?assertEqual(ok, classy_table:open(t, #{})),
     ?assertEqual(ok, classy_table:stop(t, 1000)),
@@ -20,13 +22,14 @@ smoke_open_test() ->
     ?assertEqual(ok, classy_table:open(t, #{})),
     ?assertEqual(ok, classy_table:open(t, #{}))
   after
-    cleanup(?FUNCTION_NAME)
+    classy_table:drop(t),
+    cleanup(Clean)
   end.
 
 %% This test verifies effects of write and delete operations.
 smoke_write_delete_test() ->
+  Clean = setup(?FUNCTION_NAME),
   try
-    setup(?FUNCTION_NAME),
     ?assertEqual(ok, classy_table:open(t, #{})),
     ?assertEqual(ok, classy_table:write(t, foo, foo)),
     ?assertEqual(ok, classy_table:write(t, foo, bar)),
@@ -34,13 +37,14 @@ smoke_write_delete_test() ->
     ?assertEqual(ok, classy_table:delete(t, foo)),
     ?assertEqual([], classy_table:lookup(t, foo))
   after
-    cleanup(?FUNCTION_NAME)
+    classy_table:drop(t),
+    cleanup(Clean)
   end.
 
 %% This test verifies effects of dirty write and delete operations.
 smoke_dirty_write_delete_test() ->
+  Clean = setup(?FUNCTION_NAME),
   try
-    setup(?FUNCTION_NAME),
     ?assertEqual(ok, classy_table:open(t, #{})),
     ?assertEqual(ok, classy_table:dirty_write(t, foo, foo)),
     ?assertEqual(ok, classy_table:dirty_write(t, foo, bar)),
@@ -48,13 +52,14 @@ smoke_dirty_write_delete_test() ->
     ?assertEqual(ok, classy_table:dirty_delete(t, foo)),
     ?assertEqual([], classy_table:lookup(t, foo))
   after
-    cleanup(?FUNCTION_NAME)
+    classy_table:drop(t),
+    cleanup(Clean)
   end.
 
 %% This test verifies restoration of the log after combined dirty writes and deletes.
 smoke_restore_test() ->
+  Clean = setup(?FUNCTION_NAME),
   try
-    setup(?FUNCTION_NAME),
     ?assertEqual(ok, classy_table:open(t, #{})),
     %% Set `foo' to 1000:
     [?assertEqual(ok, classy_table:dirty_write(t, foo, N)) || N <- lists:seq(1, 100)],
@@ -71,13 +76,14 @@ smoke_restore_test() ->
     ?assertEqual([100], classy_table:lookup(t, bar)),
     ?assertEqual([], classy_table:lookup(t, baz))
   after
-    cleanup(?FUNCTION_NAME)
+    classy_table:drop(t),
+    cleanup(Clean)
   end.
 
 %% This test verifies snapshot restoration.
 smoke_snapshot_test() ->
+  Clean = setup(?FUNCTION_NAME),
   try
-    setup(?FUNCTION_NAME),
     %% Insert data:
     ?assertEqual(ok, classy_table:open(t, #{})),
     [?assertEqual(ok, classy_table:dirty_write(t, N, N)) || N <- lists:seq(1, 100)],
@@ -88,23 +94,32 @@ smoke_snapshot_test() ->
     %% Verify data:
     [?assertEqual([N], classy_table:lookup(t, N)) || N <- lists:seq(1, 100)]
   after
-    cleanup(?FUNCTION_NAME)
+    classy_table:drop(t),
+    cleanup(Clean)
   end.
 
 %%================================================================================
 %% Helper functions
 %%================================================================================
 
-setup(FunctionName) ->
-  Dir = dir(FunctionName),
+-record(cleanup,
+        { dir
+        , apps
+        }).
+
+setup(TC) ->
+  Dir = dir(TC),
   application:set_env(classy, table_dir, Dir),
   application:set_env(classy, table_batch_size, 10),
-  filelib:ensure_path(Dir),
-  application:ensure_all_started(classy).
+  ok = filelib:ensure_path(Dir),
+  {ok, Apps} = application:ensure_all_started(classy),
+  #cleanup{ dir = Dir
+          , apps = lists:reverse(Apps)
+          }.
 
-cleanup(FunctionName) ->
-  file:del_dir_r(dir(FunctionName)),
-  application:stop(classy).
+cleanup(#cleanup{dir = Dir, apps = Apps}) ->
+  [application:stop(A) || A <- lists:reverse(Apps)],
+  ok = file:del_dir(Dir).
 
-dir(FunctionName) ->
-  filename:join("_build/test_data", atom_to_list(FunctionName)).
+dir(TC) ->
+  filename:join("_build/test_data", atom_to_list(TC)).
