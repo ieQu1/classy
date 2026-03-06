@@ -119,7 +119,7 @@ setup(TC) ->
 
 cleanup(#cleanup{dir = Dir, apps = Apps}) ->
   [application:stop(A) || A <- lists:reverse(Apps)],
-  ok = file:del_dir(Dir).
+  ok = file:del_dir_r(Dir).
 
 dir(TC) ->
   filename:join("_build/test_data", atom_to_list(TC)).

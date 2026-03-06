@@ -11,15 +11,15 @@
 -behavior(gen_server).
 
 %% API:
--export([set/5, members/2, list_local_sites/1]).
+-export([set_member/4, members/2, list_local_sites/1, get_data/4]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([start_link/1, cast_sync/3]).
+-export([start_link/2, cast_sync/3]).
 
--export_type([start_args/0, op/0, ord/0, clock/0]).
+-export_type([start_args/0, op/0, ord/0, clock/0, sync_data/0]).
 
 -include("classy_internal.hrl").
 
@@ -80,12 +80,16 @@
           %% c
         , c :: clock()
         , data :: [op()]
+        , reserved
         }).
+
+-type sync_data() :: #cast_sync{}.
 
 %% Timeout message triggering syncing out state
 -record(to_sync_out, {}).
 
 -record(call_set, {target :: classy:site(), k :: site_prop(), v :: term()}).
+-record(call_get_data, {since :: clock(), acked :: clock()}).
 
 -record(s,
         { %% Cluster ID:
@@ -119,10 +123,10 @@
 %% it will create a new entry that will eventually make its way to the entire cluster.
 %% This fictitious site will exist in `down` state until kicked,
 %% and even then some records about it may be kept around.
--spec set(classy:cluster_id(), classy:site(), classy:site(), site_prop(), _PropVal) -> ok | {error, _}.
-set(Cluster, Local, Target, K, V) ->
+-spec set_member(classy:cluster_id(), classy:site(), classy:site(), boolean()) -> ok | {error, _}.
+set_member(Cluster, Local, Target, Mem) when is_boolean(Mem) ->
   try
-    gen_server:call(?via(Cluster, Local), #call_set{target = Target, k = K, v = V})
+    gen_server:call(?via(Cluster, Local), #call_set{target = Target, k = ?mem, v = Mem}, infinity)
   catch
     EC:Err -> {error, {EC, Err}}
   end.
@@ -162,13 +166,18 @@ list_local_sites(all) ->
 %% Internal exports
 %%================================================================================
 
--spec start_link(start_args()) -> {ok, pid()}.
-start_link(Args = #{cluster := Cluster, site := Local}) ->
+-spec start_link(classy:cluster_id(), classy:site()) -> {ok, pid()}.
+start_link(Cluster, Local) ->
+  Args = #{cluster => Cluster, site => Local},
   gen_server:start_link(?via(Cluster, Local), ?MODULE, Args, []).
 
--spec cast_sync(classy:cluster_id(), classy:site(), #cast_sync{}) -> ok.
+-spec cast_sync(classy:cluster_id(), classy:site(), sync_data()) -> ok.
 cast_sync(Cluster, Site, Cast) ->
   gen_server:cast(?via(Cluster, Site), Cast).
+
+-spec get_data(classy:cluster_id(), classy:site(), clock(), clock()) -> sync_data().
+get_data(Cluster, Local, Since, Acked) ->
+  gen_server:call(?via(Cluster, Local), #call_get_data{since = Since, acked = Acked}).
 
 %%================================================================================
 %% behavior callbacks
@@ -182,15 +191,22 @@ init(#{cluster := Cluster, site := Site}) ->
     [Clock] -> ok;
     [] -> Clock = 0
   end,
-  S = #s{ cluster = Cluster
-        , site = Site
-        , clock = Clock
-        },
+  S0 = #s{ cluster = Cluster
+         , site = Site
+         , clock = Clock
+         },
+  S = local_command(#call_set{ target = Site
+                             , k = ?host
+                             , v = node()
+                             },
+                   S0),
   {ok, need_sync(0, S)}.
 
 handle_call(#call_set{} = CMD, _From, S0) ->
   S = local_command(CMD, S0),
   {reply, ok, S};
+handle_call(#call_get_data{since = Since, acked = Acked}, _From, S) ->
+  {reply, get_sync_data(Since, Acked, S), S};
 handle_call(_Call, _From, S) ->
   {reply, {error, unknown_call}, S}.
 
@@ -218,7 +234,6 @@ terminate(_Reason, #s{}) ->
 %%================================================================================
 %% Internal functions
 %%================================================================================
-
 
 %% @doc Total order of the operation.
 %%
@@ -277,25 +292,28 @@ handle_sync_in(Req, S0) ->
   end.
 
 -spec handle_sync_out(#s{}) -> #s{}.
-handle_sync_out(S = #s{cluster = Cluster, site = Local, clock = C}) ->
+handle_sync_out(S = #s{cluster = Cluster}) ->
   maps:foreach(
     fun(Site, Node) ->
         Since = get_acked_out(Site, S),
-        Data = memtab_since(Since, S),
-        Cast =  #cast_sync{ cluster = Cluster
-                          , from = Local
-                          , since = Since
-                          , acked = get_acked_in(Site, S)
-                          , c = C
-                          , data = Data
-                          },
+        Acked = get_acked_in(Site, S),
+        Data = get_sync_data(Since, Acked, S),
         case node() of
-          Node -> ?MODULE:cast_sync(Cluster, Site, Cast);
-          _    -> erpc:cast(Node, ?MODULE, cast_sync, [Cluster, Site, Cast])
+          Node -> ?MODULE:cast_sync(Cluster, Site, Data);
+          _    -> erpc:cast(Node, ?MODULE, cast_sync, [Cluster, Site, Data])
         end
     end,
     sync_targets(S)),
   S.
+
+get_sync_data(Since, Acked, S = #s{cluster = Cluster, site = Local, clock = C}) ->
+  #cast_sync{ cluster = Cluster
+            , from = Local
+            , since = Since
+            , acked = Acked
+            , c = C
+            , data = memtab_since(Since, S)
+            }.
 
 -spec merge(clock(), op(), #s{}) -> boolean().
 merge(LTime, Op, S) ->
@@ -322,7 +340,7 @@ run_hooks(S = #s{cluster = Cluster, site = Local}) ->
           [#pv_last{hooks_ran = true}] ->
             ok;
           [#pv_last{op = Op, hooks_ran = false} = V] ->
-            classy_hook:foreach(membership_change, [Cluster, Local, Peer, state(Op)]),
+            classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, state(Op)]),
             classy_table:dirty_write(?ptab, K, V#pv_last{hooks_ran = true})
         end
     end,
@@ -452,11 +470,13 @@ set_acked_out(Site, Clock, #s{cluster = Cluster, site = Local}) ->
     #pk_acked_out{c = Cluster, l = Local, r = Site},
     Clock).
 
-sync_targets(S = #s{cluster = Cluster}) ->
-  maps:merge(
-    nodes_of_cluster(S),
-    classy_node:nodes_of_cluster(Cluster)
-   ).
+sync_targets(S = #s{cluster = Cluster, site = Local}) ->
+  maps:remove(
+    Local,
+    maps:merge(
+      nodes_of_cluster(S),
+      classy_node:nodes_of_cluster(Cluster)
+     )).
 
 -ifndef(CONCUERROR).
 
@@ -514,27 +534,23 @@ table_scans_test() ->
     %% Check `peers' function:
     [?assertEqual(
         [<<"s1">>, <<"s2">>],
-        lists:sort(peers(S))
-       )
+        lists:sort(peers(S)))
      || S <- [S1, S2]],
     %% Check `members' function:
     ?assertEqual(
        [<<"s1">>],
-       members(<<"c1">>, <<"s1">>)
-      ),
+       members(<<"c1">>, <<"s1">>)),
     ?assertEqual(
        [<<"s1">>],
        members(<<"c2">>, <<"s2">>)
       ),
     ?assertEqual(
        [],
-       members(<<"c1">>, <<"s2">>)
-      ),
+       members(<<"c1">>, <<"s2">>)),
     %% Check `nodes_of_cluster' function:
     [?assertEqual(
         #{<<"s1">> => 'n1@localhost', <<"s2">> => 'n2@localhost'},
-        nodes_of_cluster(S)
-       )
+        nodes_of_cluster(S))
      || S <- [S1, S2]]
   after
     classy_table:drop(?ptab),

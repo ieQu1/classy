@@ -4,7 +4,7 @@
 -module(classy_hook).
 
 %% API:
--export([ create_table/0
+-export([ init/0
         , insert/3
         , foreach/2
         , all/2
@@ -28,8 +28,22 @@
 %% API functions
 %%================================================================================
 
-create_table() ->
-  ets:new(?tab, [named_table, ordered_set, public, {keypos, 1}]).
+init() ->
+  ets:new(?tab, [named_table, ordered_set, public, {keypos, 1}]),
+  case application:get_env(classy, setup_hooks) of
+    {ok, {Mod, Func, Args}} ->
+      apply(Mod, Func, Args),
+      ok;
+    undefined ->
+      %% Standard initialization. Note to developer: keep this clause
+      %% very minimal. Only add actions that library user is
+      %% _expected_ to override or ignore.
+      classy:on_node_init(
+        fun() ->
+            classy_node:maybe_init_the_site(undefined, undefined)
+        end,
+        0)
+  end.
 
 -spec insert(hookpoint(), fun(), prio()) -> ok.
 insert(Hookpoint, Hook, Prio) when is_atom(Hookpoint), is_integer(Prio), is_function(Hook) ->

@@ -84,7 +84,7 @@ start_link_membership_sup() ->
 %%================================================================================
 
 init(#top{}) ->
-  _ = classy_hook:create_table(),
+  _ = classy_hook:init(),
   NodeMon = #{ id       => node
              , start    => {classy_node, start_link, []}
              , shutdown => 5_000
@@ -95,7 +95,7 @@ init(#top{}) ->
              , sup_spec(#{id => ?MEMBERSHIP_SUP, start => {?MODULE, start_link_membership_sup, []}})
              , NodeMon
              ],
-  SupFlags = #{ strategy      => one_for_all
+  SupFlags = #{ strategy      => rest_for_one
               , intensity     => 10
               , period        => 10
               , auto_shutdown => never
@@ -106,7 +106,7 @@ init(#table_sup{}) ->
               , start    => {classy_table, start_link, []}
               , shutdown => infinity
               , type     => worker
-              , restart  => temporary
+              , restart  => permanent
               },
   SupFlags = #{ strategy      => simple_one_for_one
               , intensity     => 10
@@ -119,7 +119,7 @@ init(#membership_sup{}) ->
               , start    => {classy_membership, start_link, []}
               , shutdown => 5_000
               , type     => worker
-              , restart  => temporary
+              , restart  => permanent
               },
   SupFlags = #{ strategy      => simple_one_for_one
               , intensity     => 10

@@ -18,4 +18,12 @@
 
 -record(classy_kv, {k, v}).
 
+-define(on_node_init, on_node_init).
+-define(on_site_status_change, on_site_status_change).
+-define(on_membership_change, on_membership_change).
+-define(on_pre_join, on_pre_join).
+-define(on_post_join, on_post_join).
+-define(on_pre_leave, on_pre_leave).
+-define(on_post_leave, on_post_leave).
+
 -endif.
