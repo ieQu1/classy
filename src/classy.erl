@@ -4,7 +4,12 @@
 -module(classy).
 
 %% API:
+-export([ join/1
+        ]).
+
 -export([ on_node_init/2
+        , on_create_cluster/2
+        , on_create_site/2
         , on_site_status_change/2
         , on_membership_change/2
         , pre_join/2
@@ -28,9 +33,9 @@
 %% Type declarations
 %%================================================================================
 
--type cluster_id() :: term().
+-type cluster_id() :: binary().
 
--type site() :: term().
+-type site() :: binary().
 
 -type site_status_hook() :: fun((cluster_id(), _Local :: site(), _Up :: boolean()) -> _).
 
@@ -48,6 +53,10 @@
 %% Cluster management
 %%--------------------------------------------------------------------------------
 
+-spec join(node()) -> ok | {error, _}.
+join(Node) ->
+  classy_node:join(Node).
+
 %%--------------------------------------------------------------------------------
 %% Hooks
 %%--------------------------------------------------------------------------------
@@ -59,10 +68,22 @@
 
 %% @doc Register a hook that is executed when the node (not the site)
 %% starts. It is called before `the_site' and `the_cluster' are
-%% initialized.
--spec on_node_init(fun(() -> ok), classy_hook:prio()) -> ok.
+%% initialized and can be used to overreride the default cluster and
+%% site initialization logic.
+-spec on_node_init(fun(() -> _), classy_hook:prio()) -> ok.
 on_node_init(Hook, Prio) ->
   classy_hook:insert(?on_node_init, Hook, Prio).
+
+%% @doc This callback is called once per cluster by the site that
+%% originally creates the cluster.
+-spec on_create_cluster(fun((cluster_id()) -> _), classy_hook:prio()) -> ok.
+on_create_cluster(Hook, Prio) ->
+  classy_hook:insert(?on_create_cluster, Hook, Prio).
+
+%% @doc This callback is called once per site.
+-spec on_create_site(fun((site()) -> _), classy_hook:prio()) -> ok.
+on_create_site(Hook, Prio) ->
+  classy_hook:insert(?on_create_site, Hook, Prio).
 
 %% @doc Register a hook that is executed when a site changes
 %% status from up to down and vice versa.
@@ -79,7 +100,7 @@ on_membership_change(Hook, Prio) ->
 %% remote site and/or cluster. WARNING: this hook should not have side
 %% effects. It should only check if it is ok to join.
 -spec pre_join(
-        fun((classy:cluster_id(), Remote) -> ok | {error, _}),
+        fun((classy:cluster_id(), Remote, node()) -> ok | {error, _}),
         classy_hook:prio()
        ) -> ok
    when Remote :: classy:site().
@@ -89,10 +110,10 @@ pre_join(Hook, Prio) ->
 %% @doc Register a hook that is executed after a local site joins a
 %% cluster.
 -spec post_join(
-        fun((classy:cluster_id(), Remote) -> _),
+        fun((classy:cluster_id(), Local) -> _),
         classy_hook:prio()
        ) -> ok
-   when Remote :: classy:site().
+   when Local :: classy:site().
 post_join(Hook, Prio) ->
   classy_hook:insert(?on_post_join, Hook, Prio).
 

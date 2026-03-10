@@ -30,14 +30,18 @@
 
 -record(call_join, {node :: node()}).
 
+-define(node_tab, classy_node_status_tab).
+
+-record(node_info, {node, cluster, isup, site}).
+
 %%================================================================================
 %% API functions
 %%================================================================================
 
 -spec maybe_init_the_site(classy:cluster_id() | undefined, classy:site() | undefined) -> ok.
 maybe_init_the_site(MaybeCluster, MaybeSite) ->
-  ensure_value(?the_cluster, MaybeCluster),
-  ensure_value(?the_site, MaybeSite).
+  ensure_value(?the_site, ?on_create_site, MaybeSite),
+  ensure_value(?the_cluster, ?on_create_cluster, MaybeCluster).
 
 -spec start_link() -> {ok, pid()}.
 start_link() ->
@@ -45,7 +49,8 @@ start_link() ->
 
 -spec nodes_of_cluster(classy:cluster_id()) -> #{classy:site() => node()}.
 nodes_of_cluster(_Cluster) ->
-  #{}.
+  #{
+   }.
 
 -spec the_cluster() -> {ok, classy:cluster_id()} | undefined.
 the_cluster() ->
@@ -75,6 +80,8 @@ join(Node) ->
 
 init(_) ->
   process_flag(trap_exit, true),
+  logger:update_process_metadata(#{domain => [classy, node]}),
+  ets:new(?node_tab, [named_table, protected, {keypos, #node_info.node}]),
   net_kernel:monitor_nodes(
     true,
     #{ node_type => visible
@@ -145,7 +152,7 @@ handle_join(Node, S0) ->
      , mem_data := MemData
      } ->
       S = monitor_site(Remote, RemotePid, S0),
-      case classy_hook:all(?on_pre_join, [Cluster, Remote]) of
+      case classy_hook:all(?on_pre_join, [Cluster, Remote, Node]) of
         ok ->
           do_join_node(Node, Cluster, Remote, MemData, S);
         Err ->
@@ -196,7 +203,7 @@ join_cluster(Cluster, Local, S) ->
   {ok, _} = classy_sup:start_membership(Cluster, Local),
   ok = classy_membership:set_member(Cluster, Local, Local, true),
   classy_hook:foreach(?on_post_join, [Cluster, Local]),
-  classy_table:write(?ptab, ?the_cluster, Cluster),
+  set_val(?the_cluster, Cluster),
   {ok, S}.
 
 monitor_site(Site, Node, S) ->
@@ -205,20 +212,24 @@ monitor_site(Site, Node, S) ->
 demonitor_site(Site, Node, S) ->
   S.
 
--spec ensure_value(?the_cluster | ?the_site, binary() | undefined) -> ok.
-ensure_value(Key, Default) ->
+-spec ensure_value(?the_cluster | ?the_site, ?on_create_cluster | ?on_create_site, binary() | undefined) -> ok.
+ensure_value(Key, OnCreateHook, Default) ->
   case classy_table:lookup(?ptab, Key) of
-    [_] ->
+    [Bin] when is_binary(Bin) ->
       ok;
     [] ->
       case Default of
         undefined ->
-          Val = crypto:strong_rand_bytes(32);
+          Val = base64:encode(crypto:strong_rand_bytes(32));
         Val when is_binary(Val) ->
           ok
       end,
-      classy_table:write(?ptab, Key, Default)
+      classy_hook:foreach(OnCreateHook, [Val]),
+      set_val(Key, Val)
   end.
 
 rpc_timeout() ->
   application:get_env(classy, rpc_timeout, 5_000).
+
+set_val(Key, Val) when is_binary(Val), Key =/= ?the_site orelse Key =/= ?the_cluster ->
+  classy_table:write(?ptab, Key, Val).

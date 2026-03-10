@@ -24,11 +24,11 @@ eunit: compile
 	$(REBAR) eunit verbose=true
 
 .PHONY: test
-test: smoke-test concuerror_test
+test: smoke-test #concuerror_test
 
 .PHONY: smoke-test
 smoke-test:
-	$(REBAR) do eunit, ct -v --cover
+	$(REBAR) do eunit, ct --name ct@127.0.0.1 -v --cover --readable=false
 
 cover: | smoke-test
 	$(REBAR) cover

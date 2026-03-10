@@ -41,6 +41,7 @@
 -export_type([tab/0, rec/0, options/0]).
 
 -include("classy_internal.hrl").
+-include_lib("snabbkaffe/include/trace.hrl").
 
 %%================================================================================
 %% Type declarations

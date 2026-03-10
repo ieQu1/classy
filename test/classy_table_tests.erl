@@ -114,7 +114,7 @@ setup(TC) ->
   ok = filelib:ensure_path(Dir),
   {ok, Apps} = application:ensure_all_started(classy),
   #cleanup{ dir = Dir
-          , apps = lists:reverse(Apps)
+          , apps = Apps
           }.
 
 cleanup(#cleanup{dir = Dir, apps = Apps}) ->

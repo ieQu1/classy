@@ -22,6 +22,7 @@
 -export_type([start_args/0, op/0, ord/0, clock/0, sync_data/0]).
 
 -include("classy_internal.hrl").
+-include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -31,7 +32,7 @@
 %% Type declarations
 %%================================================================================
 
--define(default_sync_timeout, 100).
+-define(default_sync_timeout, 1000).
 -define(ptab, classy_membership).
 
 -define(name(CLUSTER, SITE), {n, l, {?MODULE, CLUSTER, SITE}}).
@@ -184,8 +185,13 @@ get_data(Cluster, Local, Since, Acked) ->
 %%================================================================================
 
 -spec init(start_args()) -> {ok, #s{}}.
-init(#{cluster := Cluster, site := Site}) ->
+init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluster) ->
   process_flag(trap_exit, true),
+  logger:update_process_metadata(
+    #{ domain => [classy, membership]
+     , cluster => Cluster
+     , local => Site
+     }),
   ok = classy_table:open(?ptab, #{}),
   case classy_table:lookup(?ptab, #pk_clock{c = Cluster, s = Site}) of
     [Clock] -> ok;
@@ -224,7 +230,7 @@ handle_info(#to_sync_out{}, S0) ->
   ok = classy_table:flush(?ptab),
   S = handle_sync_out(S1),
   run_hooks(S),
-  {noreply, S};
+  {noreply, need_sync(S)};
 handle_info(_Info, S) ->
   {noreply, S}.
 
@@ -257,6 +263,11 @@ state(#op_set{val = Val}) ->
 
 -spec local_command(#call_set{}, #s{}) -> #s{}.
 local_command(#call_set{target = Target, k = K, v = V}, S0 = #s{site = Local}) ->
+  ?tp(classy_local_command,
+      #{ target => Target
+       , prop => K
+       , val => V
+       }),
   {C, S} = inc_get_clock(S0),
   Op = #op_set{ origin = Local
               , target = Target
@@ -276,6 +287,13 @@ handle_sync_in(Req, S0) ->
             , acked = AckedOut
             , data = Data
             } = Req,
+  ?tp(debug, classy_membership_sync_in,
+      #{ from => From
+       , since => Since
+       , clock => Cf
+       , acked => AckedOut
+       , data => Data
+       }),
   case get_acked_in(From, S0) >= Since of
     true ->
       {Cl, S} = inc_get_clock(sync_clock(Cf, S0)),
@@ -293,17 +311,29 @@ handle_sync_in(Req, S0) ->
 
 -spec handle_sync_out(#s{}) -> #s{}.
 handle_sync_out(S = #s{cluster = Cluster}) ->
+  SyncTargets = sync_targets(S),
+  ?tp(debug, classy_membership_sync_out,
+      #{ targets => SyncTargets
+       , data => ets:tab2list(?ptab)
+       }),
   maps:foreach(
     fun(Site, Node) ->
         Since = get_acked_out(Site, S),
         Acked = get_acked_in(Site, S),
         Data = get_sync_data(Since, Acked, S),
+        ?tp(debug, classy_membership_sync_target,
+            #{ remote => Site
+             , noe => Node
+             , since => Since
+             , acked => Acked
+             , data => Data
+             }),
         case node() of
           Node -> ?MODULE:cast_sync(Cluster, Site, Data);
           _    -> erpc:cast(Node, ?MODULE, cast_sync, [Cluster, Site, Data])
         end
     end,
-    sync_targets(S)),
+    SyncTargets),
   S.
 
 get_sync_data(Since, Acked, S = #s{cluster = Cluster, site = Local, clock = C}) ->
@@ -369,7 +399,7 @@ memtab_lookup(Site, K, #s{cluster = Cluster, site = Local}) ->
 
 -spec memtab_since(clock(), #s{}) -> [op()].
 memtab_since(Since, #s{cluster = Cluster, site = Local}) ->
-  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '_'}
+  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, _ = '_'}
                    , v = #pv_last{op = '$1', tou = '$2', _ = '_'}
                    , _ = '_'
                    }

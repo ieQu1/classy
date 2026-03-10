@@ -14,6 +14,8 @@
              , prio/0
              ]).
 
+-include_lib("snabbkaffe/include/snabbkaffe.hrl").
+
 %%================================================================================
 %% Type declarations
 %%================================================================================
@@ -30,19 +32,63 @@
 
 init() ->
   ets:new(?tab, [named_table, ordered_set, public, {keypos, 1}]),
+  %% Default initialization:
+  classy:on_node_init(
+    fun() ->
+        ?tp(classy_on_node_init,
+            #{ node => node()
+             }),
+        classy_node:maybe_init_the_site(undefined, undefined)
+    end,
+    -100),
+  classy:on_create_cluster(
+    fun(Cluster) ->
+        {ok, Local} = classy_node:the_site(),
+        ?tp(info, classy_create_new_cluster,
+            #{ cluster => Cluster
+             }),
+        classy_membership:set_member(Cluster, Local, Local, true),
+        ok
+    end,
+    100),
+  %% Info logging:
+  classy:pre_join(
+    fun(Cluster, Remote, Node) ->
+        ?tp(debug, classy_pre_join_node,
+            #{ cluster => Cluster
+             , remote => Remote
+             , remote_node => Node
+             }),
+        ok
+    end,
+    100),
+  classy:post_join(
+    fun(Cluster, Local) ->
+        ?tp(notice, classy_joined_cluster,
+            #{ cluster => Cluster
+             , local_site => Local
+             })
+    end,
+    -100),
+  classy:on_membership_change(
+    fun(Cluster, _Local, Remote, Member) ->
+        Kind = case Member of
+                 true -> classy_member_join;
+                 false -> classy_member_leave
+               end,
+        ?tp(notice, Kind,
+            #{ cluster => Cluster
+             , site => Remote
+             })
+    end,
+    100),
+  %% User initializaiton:
   case application:get_env(classy, setup_hooks) of
     {ok, {Mod, Func, Args}} ->
       apply(Mod, Func, Args),
       ok;
     undefined ->
-      %% Standard initialization. Note to developer: keep this clause
-      %% very minimal. Only add actions that library user is
-      %% _expected_ to override or ignore.
-      classy:on_node_init(
-        fun() ->
-            classy_node:maybe_init_the_site(undefined, undefined)
-        end,
-        0)
+      ok
   end.
 
 -spec insert(hookpoint(), fun(), prio()) -> ok.
