@@ -60,12 +60,9 @@ cluster(Specs0, CommonEnv) ->
 
 -spec start_cluster(node | classy, [node_spec()]) -> [run_info()].
 start_cluster(node, Specs) ->
-  Nodes = [start_peer(node, I) || I <- Specs],
-  Nodes;
+  [start_peer(node, I) || I <- Specs];
 start_cluster(classy, Specs) ->
-  Ret = start_cluster(node, Specs),
-  [start_classy(I) || I <- Ret],
-  Ret.
+  [start_peer(classy, I) || I <- Specs].
 
 start_peer(
   node,
@@ -108,9 +105,7 @@ start_peer(
   Ret;
 start_peer(classy, Spec) ->
   Ret = start_peer(node, Spec),
-  ok = rpc(Ret, mria, start, []),
-  ok = rpc(Ret, mria_transaction_gen, init, []),
-  Ret.
+  start_classy(Ret).
 
 teardown_cluster(Specs) ->
   ?tp(notice, teardown_cluster, #{}),
