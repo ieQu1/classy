@@ -9,7 +9,7 @@
 -export([ start_link/0
         , stop/1
         , start_table/2
-        , start_membership/2
+        , ensure_membership/2
         ]).
 
 %% behavior callbacks:
@@ -63,9 +63,16 @@ stop(Timeout) ->
 start_table(Tab, Options) ->
   supervisor:start_child(?TABLE_SUP, [Tab, Options]).
 
--spec start_membership(classy:cluster_id(), classy:site()) -> {ok, pid()} | {error, _}.
-start_membership(Cluster, Site) ->
-  supervisor:start_child(?MEMBERSHIP_SUP, [Cluster, Site]).
+-spec ensure_membership(classy:cluster_id(), classy:site()) -> {ok, pid()} | {error, _}.
+ensure_membership(Cluster, Site) ->
+  case supervisor:start_child(?MEMBERSHIP_SUP, [Cluster, Site]) of
+    {ok, _} = Ok ->
+      Ok;
+    {error, {already_started, Pid}} ->
+      {ok, Pid};
+    Err ->
+      Err
+  end.
 
 %%================================================================================
 %% Internal exports

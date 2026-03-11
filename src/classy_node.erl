@@ -23,6 +23,7 @@
 
 -export_type([]).
 
+-include_lib("snabbkaffe/include/trace.hrl").
 -include("classy_internal.hrl").
 
 %%================================================================================
@@ -112,7 +113,7 @@ init(_) ->
   maybe
     {ok, Cluster} ?= the_cluster(),
     {ok, Site} ?= the_site(),
-    {ok, _} = classy_sup:start_membership(Cluster, Site),
+    {ok, _} = classy_sup:ensure_membership(Cluster, Site),
     S = #s{ cluster = Cluster
           , site = Site
           },
@@ -198,6 +199,9 @@ handle_membership_change_event(
      Remote =:= ThisSite,
      Member =:= false ->
       %% We got kicked:
+      ?tp(warning, classy_kicked_remotely,
+          #{ cluster => Cluster
+           }),
       on_leave(S);
      true ->
       S
@@ -241,9 +245,10 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
   {ok, Local} = the_site(),
   case the_cluster() of
     {ok, Cluster} ->
-      %% Already in the same cluster with `Node'. Just trigger
-      %% re-sync (do we need to re-run hooks?):
+      %% Already in the same cluster with `Node'. Set our membership
+      %% status and trigger re-sync (do we need to re-run hooks?):
       classy_membership:cast_sync(Cluster, Local, MemData),
+      classy_membership:set_member(Cluster, Local, Local, true),
       {ok, S0};
     {ok, OldCluster} when OldCluster =/= Cluster ->
       %% Site is currently in a different cluster. Leave it first:
@@ -274,7 +279,7 @@ on_leave(S = #s{cluster = Cluster, site = Local}) ->
      }.
 
 join_cluster(Cluster, Local, S) ->
-  {ok, _} = classy_sup:start_membership(Cluster, Local),
+  {ok, _} = classy_sup:ensure_membership(Cluster, Local),
   classy_hook:foreach(?on_post_join, [Cluster, Local]),
   set_val(?the_cluster, Cluster),
   {ok, S#s{cluster = Cluster}}.
