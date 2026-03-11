@@ -79,12 +79,13 @@ start_peer(
   filelib:ensure_path(WorkDir),
   CommonBeamOpts = "+S 1:1 " % We want VMs to only occupy a single core
     "-kernel inet_dist_listen_min 3000 " % Avoid collisions with gen_rpc ports
-    "-kernel inet_dist_listen_max 3050 ",
+    "-kernel inet_dist_listen_max 3050 "
+    "-proto_dist inet_tcp_proxy ",
   {ok, Pid, Node} = ?CT_PEER(#{ name => Name
                               , longnames => true
                               , peer_down => stop
                               , host => "127.0.0.1"
-                                %% , args => string:words(CommonBeamOpts)
+                              , args => string:split(CommonBeamOpts, " ")
                               , shutdown => halt
                               , wait_boot => 5_000
                               }),
@@ -100,6 +101,7 @@ start_peer(
   LogLevel = list_to_atom(os:getenv("LOG_LEVEL", "notice")),
   rpc(Ret, logger, update_primary_config, [#{level => LogLevel}]),
   rpc(Ret, logger, update_handler_config, [default, #{level => LogLevel}]),
+  {ok, _} = rpc(Ret, application, ensure_all_started, [inet_tcp_proxy_dist]),
   [{ok, _} = cover:start([Node]) || Cover],
   setenv(Ret, Env),
   ok = snabbkaffe:forward_trace(Node),
@@ -178,9 +180,6 @@ run_on(Pid, Fun, Args) ->
 
 set_network_delay(N) ->
   ok = file:write_file("/tmp/nemesis", integer_to_list(N) ++ "us\n").
-
-vals_to_csv(L) ->
-  string:join([lists:flatten(io_lib:format("~p", [N])) || N <- L], ",") ++ "\n".
 
 setenv(Node, Env) ->
   [rpc(Node, application, set_env, [App, Key, Val]) || {App, Key, Val} <- Env].

@@ -208,19 +208,21 @@ init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluste
          , site = Site
          , clock = Clock
          },
-  %% Initialize membership in the cluster, however use clock = 0 to
-  %% avoid overriding any more recent updates:
-  S1 = local_command(0,
-                     #call_set{ target = Site
-                              , k = ?mem
-                              , v = true
-                              },
-                     S0),
-  S = local_command(#call_set{ target = Site
-                             , k = ?host
-                             , v = node()
-                             },
-                   S1),
+  %% Establish own membership in the cluster. The below operation
+  %% (with clock = 0) is used to set the default value.
+  S1 = local_command(
+         0,
+         #call_set{ target = Site
+                  , k = ?mem
+                  , v = true
+                  },
+         S0),
+  S = local_command(
+        #call_set{ target = Site
+                 , k = ?host
+                 , v = node()
+                 },
+        S1),
   {ok, need_sync(0, S)}.
 
 handle_call(#call_set{} = CMD, _From, S0) ->
