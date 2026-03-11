@@ -11,7 +11,7 @@
 -behavior(gen_server).
 
 %% API:
--export([set_member/4, members/2, list_local_sites/1, get_data/4]).
+-export([set_member/4, members/2, list_local_sites/1, get_data/4, site_of_node/2]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -165,6 +165,10 @@ list_local_sites(all) ->
        , [{{'$1', '$2'}}]
        },
   ets:select(?ptab, [MS]).
+
+-spec site_of_node(classy:cluster_id(), classy:site()) -> #{node() => classy:site()}.
+site_of_node(Cluster, Local) ->
+  maps:from_list(select_nodes(Cluster, Local, {{'$2', '$1'}})).
 
 %%================================================================================
 %% Internal exports
@@ -435,14 +439,17 @@ peers(#s{cluster = Cluster, site = Local}) ->
 
 -spec nodes_of_cluster(#s{}) -> #{classy:site() => node()}.
 nodes_of_cluster(#s{cluster = Cluster, site = Local}) ->
+  maps:from_list(select_nodes(Cluster, Local, {{'$1', '$2'}})).
+
+select_nodes(Cluster, Local, Action) ->
   MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1', k = ?host}
                    , v = #pv_last{op = #op_set{val = '$2', _ = '_'}, _ = '_'}
                    , _ = '_'
                    }
        , []
-       , [{{'$1', '$2'}}]
+       , [Action]
        },
-  maps:from_list(ets:select(?ptab, [MS])).
+  ets:select(?ptab, [MS]).
 
 %%--------------------------------------------------------------------------------
 %% Logical clocks

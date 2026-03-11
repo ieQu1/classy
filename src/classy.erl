@@ -6,6 +6,7 @@
 %% API:
 -export([ join_node/1
         , kick_site/1
+        , kick_node/1
         , sites/0
         ]).
 
@@ -62,6 +63,20 @@ join_node(Node) ->
 -spec kick_site(site()) -> ok | {error, _}.
 kick_site(Site) ->
   classy_node:kick_site(Site).
+
+-spec kick_node(node()) -> ok | {error, _}.
+kick_node(Node) ->
+  case {classy_node:the_cluster(), classy_node:the_site()} of
+    {{ok, Cluster}, {ok, Local}} ->
+      case classy_membership:site_of_node(Cluster, Local) of
+        #{Node := Site} ->
+          kick_site(Site);
+        #{} ->
+          {error, target_not_in_cluster}
+      end;
+    _ ->
+      {error, local_not_in_cluster}
+  end.
 
 -spec sites() -> [site()].
 sites() ->
