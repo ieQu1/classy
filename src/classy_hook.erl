@@ -41,22 +41,20 @@ init() ->
         classy_node:maybe_init_the_site(undefined, undefined)
     end,
     -100),
-  classy:on_create_cluster(
-    fun(Cluster) ->
-        {ok, Local} = classy_node:the_site(),
-        ?tp(info, classy_create_new_cluster,
-            #{ cluster => Cluster
-             }),
-        classy_membership:set_member(Cluster, Local, Local, true),
-        ok
-    end,
-    100),
   %% Info logging:
   classy:on_create_site(
     fun(Site) ->
         ?tp(info, classy_create_new_site,
             #{ site => Site
              })
+    end,
+    100),
+  classy:on_create_cluster(
+    fun(Cluster) ->
+        ?tp(info, classy_create_new_cluster,
+            #{ cluster => Cluster
+             }),
+        ok
     end,
     100),
   classy:pre_join(

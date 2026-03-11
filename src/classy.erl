@@ -5,6 +5,7 @@
 
 %% API:
 -export([ join/1
+        , sites/0
         ]).
 
 -export([ on_node_init/2
@@ -56,6 +57,17 @@
 -spec join(node()) -> ok | {error, _}.
 join(Node) ->
   classy_node:join(Node).
+
+-spec sites() -> [site()].
+sites() ->
+  maybe
+    {ok, Cluster} ?= classy_node:the_cluster(),
+    {ok, Local} ?= classy_node:the_site(),
+    classy_membership:members(Cluster, Local)
+  else
+    _ ->
+      []
+  end.
 
 %%--------------------------------------------------------------------------------
 %% Hooks

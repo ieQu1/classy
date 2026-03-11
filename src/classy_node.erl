@@ -6,7 +6,13 @@
 -behavior(gen_server).
 
 %% API:
--export([start_link/0, nodes_of_cluster/1, maybe_init_the_site/2, join/1]).
+-export([ start_link/0
+        , nodes_of_cluster/1
+        , maybe_init_the_site/2
+        , join/1
+        , the_site/0
+        , the_cluster/0
+        ]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -205,7 +211,6 @@ leave_cluster(Cluster, Local, S) ->
 
 join_cluster(Cluster, Local, S) ->
   {ok, _} = classy_sup:start_membership(Cluster, Local),
-  ok = classy_membership:set_member(Cluster, Local, Local, true),
   classy_hook:foreach(?on_post_join, [Cluster, Local]),
   set_val(?the_cluster, Cluster),
   {ok, S}.

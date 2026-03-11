@@ -201,11 +201,19 @@ init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluste
          , site = Site
          , clock = Clock
          },
+  %% Initialize membership in the cluster, however use clock = 0 to
+  %% avoid overriding any more recent updates:
+  S1 = local_command(0,
+                     #call_set{ target = Site
+                              , k = ?mem
+                              , v = true
+                              },
+                     S0),
   S = local_command(#call_set{ target = Site
                              , k = ?host
                              , v = node()
                              },
-                   S0),
+                   S1),
   {ok, need_sync(0, S)}.
 
 handle_call(#call_set{} = CMD, _From, S0) ->
@@ -262,13 +270,18 @@ state(#op_set{val = Val}) ->
   Val.
 
 -spec local_command(#call_set{}, #s{}) -> #s{}.
-local_command(#call_set{target = Target, k = K, v = V}, S0 = #s{site = Local}) ->
+local_command(Cmd, S0) ->
+  {C, S} = inc_get_clock(S0),
+  local_command(C, Cmd, S).
+
+-spec local_command(clock(), #call_set{}, #s{}) -> #s{}.
+local_command(C, #call_set{target = Target, k = K, v = V}, S = #s{site = Local}) ->
   ?tp(classy_local_command,
       #{ target => Target
        , prop => K
        , val => V
+       , clock => C
        }),
-  {C, S} = inc_get_clock(S0),
   Op = #op_set{ origin = Local
               , target = Target
               , c = C

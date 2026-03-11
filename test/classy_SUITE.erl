@@ -13,6 +13,7 @@
 %% Tests
 %%================================================================================
 
+%% This testcase verifies normal flow of joining one node to another:
 t_join(Conf) ->
   snabbkaffe:fix_ct_logging(),
   Cluster = classy_ct:cluster([#{}, #{}], []),
@@ -30,8 +31,25 @@ t_join(Conf) ->
                       , sites => [Site1, Site2]
                       , clusters => [Cluster1, Cluster2]
                       },
+       %% Verify status of the nodes in the singleton mode. Both
+       %% should belong to the cluster consisting of a single site,
+       %% cluster ID should be equal to the site id:
+       ?assertEqual(
+          {ok, Cluster1},
+          classy_ct:rpc(N1, classy_node, the_cluster, [])),
+       ?assertEqual(
+          [Site1],
+          classy_ct:rpc(N1, classy, sites, [])),
+       ?assertEqual(
+          {ok, Cluster2},
+          classy_ct:rpc(N2, classy_node, the_cluster, [])),
+       ?assertEqual(
+          [Site2],
+          classy_ct:rpc(N2, classy, sites, [])),
+       %% Join the nodes:
        ?tp(notice, test_join_n2, RuntimeData),
        ?assertMatch(ok, classy_ct:rpc(N2, classy, join, [maps:get(node, N1)])),
+       %% Wait until both node acknowledge the change:
        lists:foreach(
          fun(#{node := Node}) ->
              ?block_until(
@@ -42,6 +60,19 @@ t_join(Conf) ->
                  })
          end,
          Nodes),
+       %% Verify state after join:
+       ?assertEqual(
+          {ok, Cluster1},
+          classy_ct:rpc(N1, classy_node, the_cluster, [])),
+       ?assertEqual(
+          {ok, Cluster1},
+          classy_ct:rpc(N2, classy_node, the_cluster, [])),
+       ?assertEqual(
+          lists:sort([Site1, Site2]),
+          lists:sort(classy_ct:rpc(N1, classy, sites, []))),
+       ?assertEqual(
+          lists:sort([Site1, Site2]),
+          lists:sort(classy_ct:rpc(N2, classy, sites, []))),
        RuntimeData
      after
        classy_ct:teardown_cluster(Cluster)
