@@ -37,6 +37,12 @@
 
 -record(call_join, {node :: node()}).
 -record(call_kick, {site :: classy:site()}).
+-record(cast_membership_change,
+        { cluster :: classy:cluster_id()
+        , local :: classy:node()
+        , remote :: classy:node()
+        , member :: boolean()
+        }).
 
 -define(node_tab, classy_node_status_tab).
 
@@ -87,7 +93,8 @@ kick(Site) ->
 %%================================================================================
 
 -record(s,
-        {
+        { cluster :: classy:cluster_id()
+        , site :: classy:site()
         }).
 
 init(_) ->
@@ -101,11 +108,14 @@ init(_) ->
      }),
   classy_table:open(?ptab, #{}),
   classy_hook:foreach(?on_node_init, []),
+  classy:on_membership_change(fun on_membership_change/4, -100),
   maybe
     {ok, Cluster} ?= the_cluster(),
     {ok, Site} ?= the_site(),
     {ok, _} = classy_sup:start_membership(Cluster, Site),
-    S = #s{},
+    S = #s{ cluster = Cluster
+          , site = Site
+          },
     {ok, S}
   else
     _ ->
@@ -132,6 +142,8 @@ handle_call(#call_kick{site = Target}, _From, S) ->
 handle_call(_Call, _From, S) ->
   {reply, {error, unknown_call}, S}.
 
+handle_cast(#cast_membership_change{} = Cast, S) ->
+  {noreply, handle_membership_change_event(Cast, S)};
 handle_cast(_Cast, S) ->
   {noreply, S}.
 
@@ -164,6 +176,32 @@ hello() ->
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+on_membership_change(Cluster, Local, Remote, Member) ->
+  gen_server:cast(?SERVER,
+                  #cast_membership_change{ cluster = Cluster
+                                         , local = Local
+                                         , remote = Remote
+                                         , member = Member
+                                         }).
+
+handle_membership_change_event(
+  #cast_membership_change{ cluster = Cluster
+                         , local = Local
+                         , remote = Remote
+                         , member = Member
+                         },
+  S = #s{cluster = ThisCluster, site = ThisSite}
+ ) ->
+  if Cluster =:= ThisCluster,
+     Local =:= ThisSite,
+     Remote =:= ThisSite,
+     Member =:= false ->
+      %% We got kicked:
+      on_leave(S);
+     true ->
+      S
+  end.
 
 handle_kick(Cluster, Local, Target) ->
   case classy_hook:all(?on_pre_kick, [Cluster, Local]) of
@@ -224,17 +262,22 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
 leave_cluster(Cluster, Local, S) ->
   case handle_kick(Cluster, Local, Local) of
     ok ->
-      classy_table:delete(?ptab, ?the_cluster),
-      {ok, S};
+      {ok, on_leave(S)};
     Err ->
       Err
   end.
+
+on_leave(S = #s{cluster = Cluster, site = Local}) ->
+  classy_table:delete(?ptab, ?the_cluster),
+  classy_hook:foreach(?on_post_leave, [Cluster, Local]),
+  S#s{ cluster = undefined
+     }.
 
 join_cluster(Cluster, Local, S) ->
   {ok, _} = classy_sup:start_membership(Cluster, Local),
   classy_hook:foreach(?on_post_join, [Cluster, Local]),
   set_val(?the_cluster, Cluster),
-  {ok, S}.
+  {ok, S#s{cluster = Cluster}}.
 
 monitor_site(Site, Node, S) ->
   S.
