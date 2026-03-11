@@ -103,7 +103,10 @@
         }).
 
 %% Table keys:
--record(pk_clock, {c :: classy:cluster_id(), s :: classy:site()}).
+-record(pk_clock,
+        { c %% Cluster
+        , s %% Site (local)
+        }).
 -record(pk_acked_in, {c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}).
 -record(pk_acked_out, {c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}).
 -record(pk_last, {c, l, r, k}).

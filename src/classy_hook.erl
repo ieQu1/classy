@@ -14,6 +14,7 @@
              , prio/0
              ]).
 
+-include("classy_internal.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
 %%================================================================================

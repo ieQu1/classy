@@ -10,6 +10,7 @@
         , nodes_of_cluster/1
         , maybe_init_the_site/2
         , join/1
+        , kick/1
         , the_site/0
         , the_cluster/0
         ]).
@@ -35,6 +36,7 @@
 -define(the_cluster, the_cluster).
 
 -record(call_join, {node :: node()}).
+-record(call_kick, {site :: classy:site()}).
 
 -define(node_tab, classy_node_status_tab).
 
@@ -76,6 +78,10 @@ the_site() ->
 join(Node) ->
   gen_server:call(?SERVER, #call_join{node = Node}, infinity).
 
+-spec kick(classy:site()) -> ok | {error, _}.
+kick(Site) ->
+  gen_server:call(?SERVER, #call_kick{site = Site}, infinity).
+
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
@@ -99,8 +105,7 @@ init(_) ->
     {ok, Cluster} ?= the_cluster(),
     {ok, Site} ?= the_site(),
     {ok, _} = classy_sup:start_membership(Cluster, Site),
-    S = #s{
-          },
+    S = #s{},
     {ok, S}
   else
     _ ->
@@ -114,6 +119,16 @@ handle_call(#call_join{node = Node}, _From, S0) ->
     Err ->
       {reply, Err, S0}
   end;
+handle_call(#call_kick{site = Target}, _From, S) ->
+  Ret =
+    maybe
+      {ok, Cluster} ?= the_cluster(),
+      {ok, Local} ?= the_site(),
+      handle_kick(Cluster, Local, Target)
+    else
+      _ -> {error, local_not_in_cluster}
+    end,
+  {reply, Ret, S};
 handle_call(_Call, _From, S) ->
   {reply, {error, unknown_call}, S}.
 
@@ -149,6 +164,14 @@ hello() ->
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+handle_kick(Cluster, Local, Target) ->
+  case classy_hook:all(?on_pre_kick, [Cluster, Local]) of
+    ok ->
+      classy_membership:set_member(Cluster, Local, Target, false);
+    Err ->
+      Err
+  end.
 
 handle_join(Node, S0) ->
   case rpc:call(Node, ?MODULE, hello, [], rpc_timeout()) of
@@ -199,10 +222,8 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
   end.
 
 leave_cluster(Cluster, Local, S) ->
-  case classy_hook:all(?on_pre_leave, [Cluster, Local]) of
+  case handle_kick(Cluster, Local, Local) of
     ok ->
-      ok = classy_hook:foreach(?on_post_leave, [Cluster, Local]),
-      ok = classy_membership:set_member(Cluster, Local, Local, false),
       classy_table:delete(?ptab, ?the_cluster),
       {ok, S};
     Err ->

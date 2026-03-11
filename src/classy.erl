@@ -5,6 +5,7 @@
 
 %% API:
 -export([ join/1
+        , kick/1
         , sites/0
         ]).
 
@@ -15,7 +16,7 @@
         , on_membership_change/2
         , pre_join/2
         , post_join/2
-        , pre_leave/2
+        , pre_kick/2
         , post_leave/2
         ]).
 
@@ -57,6 +58,10 @@
 -spec join(node()) -> ok | {error, _}.
 join(Node) ->
   classy_node:join(Node).
+
+-spec kick(site()) -> ok | {error, _}.
+kick(Site) ->
+  classy_node:kick(Site).
 
 -spec sites() -> [site()].
 sites() ->
@@ -129,12 +134,14 @@ pre_join(Hook, Prio) ->
 post_join(Hook, Prio) ->
   classy_hook:insert(?on_post_join, Hook, Prio).
 
-%% @doc Register a hook that is executed before a local site leaves a
-%% cluster. Note: this hook should not have side effects. It's meant
-%% to check if it is ok to leave.
--spec pre_leave(pre_cluster_hook(), classy_hook:prio()) -> ok.
-pre_leave(Hook, Prio) ->
-  classy_hook:insert(?on_pre_leave, Hook, Prio).
+%% @doc Register a hook that verifies whether or not a site can be
+%% kicked from the cluster. This hook runs on the node that initiates
+%% the kick.
+%%
+%% WARNING: this hook cannot have side effects.
+-spec pre_kick(pre_cluster_hook(), classy_hook:prio()) -> ok.
+pre_kick(Hook, Prio) ->
+  classy_hook:insert(?on_pre_kick, Hook, Prio).
 
 %% @doc Register a hook that is executed after a local site leaves a
 %% cluster. This hook can perform destructive actions associated with
