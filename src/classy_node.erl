@@ -9,8 +9,8 @@
 -export([ start_link/0
         , nodes_of_cluster/1
         , maybe_init_the_site/2
-        , join/1
-        , kick/1
+        , join_node/1
+        , kick_site/1
         , the_site/0
         , the_cluster/0
         ]).
@@ -81,12 +81,12 @@ the_site() ->
     []  -> undefined
   end.
 
--spec join(node()) -> ok | {error, _}.
-join(Node) ->
+-spec join_node(node()) -> ok | {error, _}.
+join_node(Node) ->
   gen_server:call(?SERVER, #call_join{node = Node}, infinity).
 
--spec kick(classy:site()) -> ok | {error, _}.
-kick(Site) ->
+-spec kick_site(classy:site()) -> ok | {error, _}.
+kick_site(Site) ->
   gen_server:call(?SERVER, #call_kick{site = Site}, infinity).
 
 %%================================================================================

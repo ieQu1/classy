@@ -48,7 +48,7 @@ t_join(Conf) ->
           classy_ct:rpc(N2, classy, sites, [])),
        %% Join the nodes:
        ?tp(notice, test_join_n2, RuntimeData),
-       ?assertMatch(ok, classy_ct:rpc(N2, classy, join, [maps:get(node, N1)])),
+       ?assertMatch(ok, classy_ct:rpc(N2, classy, join_node, [maps:get(node, N1)])),
        %% Wait until both node acknowledge the change:
        lists:foreach(
          fun(#{node := Node}) ->

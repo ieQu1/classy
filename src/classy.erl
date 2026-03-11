@@ -4,8 +4,8 @@
 -module(classy).
 
 %% API:
--export([ join/1
-        , kick/1
+-export([ join_node/1
+        , kick_site/1
         , sites/0
         ]).
 
@@ -55,13 +55,13 @@
 %% Cluster management
 %%--------------------------------------------------------------------------------
 
--spec join(node()) -> ok | {error, _}.
-join(Node) ->
-  classy_node:join(Node).
+-spec join_node(node()) -> ok | {error, _}.
+join_node(Node) ->
+  classy_node:join_node(Node).
 
--spec kick(site()) -> ok | {error, _}.
-kick(Site) ->
-  classy_node:kick(Site).
+-spec kick_site(site()) -> ok | {error, _}.
+kick_site(Site) ->
+  classy_node:kick_site(Site).
 
 -spec sites() -> [site()].
 sites() ->
