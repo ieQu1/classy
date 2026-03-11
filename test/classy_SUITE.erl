@@ -25,20 +25,28 @@ t_join(Conf) ->
         } = classy_ct:rpc(N1, classy_node, hello, []),
        #{ site := Site2
         , cluster := Cluster2
-        } = classy_ct:rpc(N1, classy_node, hello, []),
+        } = classy_ct:rpc(N2, classy_node, hello, []),
+       RuntimeData = #{ nodes => Nodes
+                      , sites => [Site1, Site2]
+                      , clusters => [Cluster1, Cluster2]
+                      },
+       ?tp(notice, test_join_n2, RuntimeData),
        ?assertMatch(ok, classy_ct:rpc(N2, classy, join, [maps:get(node, N1)])),
-       [?block_until(
-           #{ ?snk_kind := classy_member_join
-            , cluster := Cluster1
-            , site := Site2
-            , ?snk_meta := #{node := Node}
-            })
-        || #{node := Node} <- Nodes],
-       Nodes
+       lists:foreach(
+         fun(#{node := Node}) ->
+             ?block_until(
+                #{ ?snk_kind := classy_member_join
+                 , cluster := Cluster1
+                 , site := Site2
+                 , ?snk_meta := #{node := Node}
+                 })
+         end,
+         Nodes),
+       RuntimeData
      after
        classy_ct:teardown_cluster(Cluster)
      end,
-     [ fun all_nodes_initialized_once/2
+     [ fun initialization_hooks/2
      , {"join hooks",
         fun(Trace) ->
             ?assert(
@@ -53,14 +61,32 @@ t_join(Conf) ->
 %% Internal functions
 %%================================================================================
 
-
 all() ->
   classy_ct:all(?MODULE).
 
-all_nodes_initialized_once(Cluster, Trace) ->
+initialization_hooks(RuntimeData, Trace) ->
+  #{ nodes := Nodes
+   , sites := Sites
+   , clusters := Clusters
+   } = RuntimeData,
   ?assertEqual(
-     lists:sort([N || #{node := N} <- Cluster]),
+     lists:sort([maps:get(node, I) || I <- Nodes]),
      lists:sort(
        ?projection(
           node,
-          ?of_kind(classy_on_node_init, Trace)))).
+          ?of_kind(classy_on_node_init, Trace)))),
+  ?assertEqual(
+     lists:sort(Sites),
+     lists:sort(
+       ?projection(
+          site,
+          ?of_kind(classy_create_new_site, Trace)))),
+  ?assertEqual(
+     lists:sort(Clusters),
+     lists:sort(
+       ?projection(
+          cluster,
+          ?of_kind(classy_create_new_cluster, Trace)))).
+
+end_per_testcase(_, _) ->
+  snabbkaffe:stop().

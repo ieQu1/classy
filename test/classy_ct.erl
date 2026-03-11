@@ -83,10 +83,12 @@ start_peer(
   {ok, Pid, Node} = ?CT_PEER(#{ name => Name
                               , longnames => true
                               , peer_down => stop
+                              , host => "127.0.0.1"
                                 %% , args => string:words(CommonBeamOpts)
                               , shutdown => halt
                               , wait_boot => 5_000
                               }),
+  erlang:register(Node, Pid),
   Ret = Spec#{node => Node, pid => Pid},
   Self = filename:dirname(code:which(?MODULE)),
   [erpc:call(Node, code, add_patha, [Path]) || Path <- [Self|CodePaths]],
@@ -110,9 +112,8 @@ start_peer(classy, Spec) ->
 
 teardown_cluster(Specs) ->
   ?tp(notice, teardown_cluster, #{}),
-  %% Shut down replicants first, otherwise they will make noise about core nodes going down:
-  [ok = stop_peer(I) || #{role := replicant, node := I} <- Specs],
-  [ok = stop_peer(I) || #{role := core, node := I} <- Specs],
+  [ok = stop_peer(I) || I <- Specs],
+  [remove_workdir(I) || I <- Specs],
   ok.
 
 start_classy(Spec) ->
@@ -139,10 +140,19 @@ wait_running(Node, Timeout) ->
              wait_running(Node, Timeout - 100)
   end.
 
-stop_peer(Node) ->
-  rpc(Node, application, stop, [classy]),
-  ok = cover:stop([Node]),
-  peer:stop(Node).
+stop_peer(Spec = #{name := Name}) ->
+  Node = list_to_atom(atom_to_list(Name) ++ "@127.0.0.1"),
+  case whereis(Node) of
+    Pid when is_pid(Pid) ->
+      rpc(Spec#{node => Node}, application, stop, [classy]),
+      ok = cover:stop([Node]),
+      peer:stop(Pid);
+    undefined ->
+      ok
+  end.
+
+remove_workdir(#{workdir := Dir}) ->
+  file:del_dir_r(Dir).
 
 host() ->
   [_, Host] = string:tokens(atom_to_list(node()), "@"), Host.

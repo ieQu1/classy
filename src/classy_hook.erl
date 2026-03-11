@@ -52,6 +52,13 @@ init() ->
     end,
     100),
   %% Info logging:
+  classy:on_create_site(
+    fun(Site) ->
+        ?tp(info, classy_create_new_site,
+            #{ site => Site
+             })
+    end,
+    100),
   classy:pre_join(
     fun(Cluster, Remote, Node) ->
         ?tp(debug, classy_pre_join_node,

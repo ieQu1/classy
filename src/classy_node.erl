@@ -174,9 +174,12 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
   {ok, Local} = the_site(),
   case the_cluster() of
     {ok, Cluster} ->
+      %% Already in the same cluster with `Node'. Just trigger
+      %% re-sync (do we need to re-run hooks?):
       classy_membership:cast_sync(Cluster, Local, MemData),
       {ok, S0};
     {ok, OldCluster} when OldCluster =/= Cluster ->
+      %% Site is currently in a different cluster. Leave it first:
       case leave_cluster(OldCluster, Local, S0) of
         {ok, S} ->
           do_join_node(Node, Cluster, Remote, MemData, S);
@@ -184,6 +187,7 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
           Err
       end;
     undefined ->
+      %% Site is not in any cluster:
       {ok, S} = join_cluster(Cluster, Local, S0),
       do_join_node(Node, Cluster, Remote, MemData, S)
   end.

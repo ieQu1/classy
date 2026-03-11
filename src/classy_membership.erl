@@ -314,7 +314,6 @@ handle_sync_out(S = #s{cluster = Cluster}) ->
   SyncTargets = sync_targets(S),
   ?tp(debug, classy_membership_sync_out,
       #{ targets => SyncTargets
-       , data => ets:tab2list(?ptab)
        }),
   maps:foreach(
     fun(Site, Node) ->
