@@ -109,19 +109,27 @@
         , clock :: clock()
         }).
 
-%% Table keys:
+%% Persistent table keys:
+
+%% Lamport clock of the site:
 -record(pk_clock,
         { c %% Cluster
         , s %% Site (local)
         }).
+
+%% Clock of the last message received from the peer:
 -record(pk_acked_in, {c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}).
+%% Clock of the last sync message to the peer:
 -record(pk_acked_out, {c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}).
+%% Last set command for the site:
 -record(pk_last, {c, l, r, k}).
 -type pk_last() :: #pk_last{c :: classy:cluster_id(), l :: classy:site(), r :: classy:site(), k :: site_prop()}.
+%% Hooks have been executed for all site states older than this:
+-record(pk_hooks_ran, {c :: classy:cluster_id(), l :: classy:site()}).
 
 %% Composite table values:
--record(pv_last, {op, tou, hooks_ran = false}).
--type pv_last() :: #pv_last{op :: op(), tou :: clock(), hooks_ran :: boolean()}.
+-record(pv_last, {op, tou}).
+-type pv_last() :: #pv_last{op :: op(), tou :: clock()}.
 
 %%================================================================================
 %% API functions
@@ -399,19 +407,14 @@ merge(LTime, Op, S) ->
       true
   end.
 
-run_hooks(S = #s{cluster = Cluster, site = Local}) ->
+run_hooks(S = #s{clock = C, cluster = Cluster, site = Local}) ->
+  UpdatedEntries = memtab_since(hooks_ran(S) + 1, S),
   lists:foreach(
-    fun(Peer) ->
-        K = #pk_last{c = Cluster, l = Local, r = Peer, k = mem},
-        case classy_table:lookup(?ptab, K) of
-          [#pv_last{hooks_ran = true}] ->
-            ok;
-          [#pv_last{op = Op, hooks_ran = false} = V] ->
-            classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, state(Op)]),
-            classy_table:dirty_write(?ptab, K, V#pv_last{hooks_ran = true})
-        end
+    fun(Op = #op_set{target = Peer}) ->
+        classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, state(Op)])
     end,
-    peers(S)).
+    UpdatedEntries),
+  classy_table:write(?ptab, #pk_hooks_ran{c = Cluster, l = Local}, C).
 
 -spec handle_cleanup(pos_integer(), #s{}) -> ok.
 handle_cleanup(ForgetAfter, S) ->
@@ -449,19 +452,6 @@ forget_site(Site, #s{cluster = Cluster, site = Local}) when is_binary(Site) ->
   ets:delete(?ptab, #pk_acked_out{c = Cluster, l = Local, r = Site}),
   ok.
 
-%% @doc Return list of sites that have `tou' greater then `MinTou' for
-%% any property
--spec recently_updated(clock(), #s{}) -> [classy:site()].
-recently_updated(MinTou, #s{cluster = Cluster, site = Local}) ->
-  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1', _ = '_'}
-                   , v = #pv_last{tou = '$2', _ = '_'}
-                   , _ = '_'
-                   }
-       , [{'>=', '$2', MinTou}]
-       , ['$1']
-       },
-  lists:usort(ets:select(?ptab, [MS])).
-
 -spec min_unacked(pos_integer(), #s{}) -> clock() | undefined.
 min_unacked(MinTimeWhenKicked, S) ->
   lists:foldl(
@@ -473,7 +463,7 @@ min_unacked(MinTimeWhenKicked, S) ->
             min(get_acked_out(Peer, S), Acc)
         end
     end,
-    undefined,
+    hooks_ran(S),
     peers(S)).
 
 -spec is_long_gone(pos_integer(), classy:site(), #s{}) -> boolean().
@@ -485,6 +475,15 @@ is_long_gone(MinTimeWhenKicked, Site, S) ->
     _ ->
       false
   end.
+
+%% @doc Return list of sites that have `tou' greater then `MinTou' for
+%% any property
+-spec recently_updated(clock(), #s{}) -> [classy:site()].
+recently_updated(MinTou, S) ->
+  lists:usort(
+    lists:map(
+      fun(#op_set{target = T}) -> T end,
+      memtab_since(MinTou, S))).
 
 %%--------------------------------------------------------------------------------
 %% Interface for site state storage
@@ -598,6 +597,15 @@ get_acked_out(Site, #s{cluster = C, site = Local}) ->
   case classy_table:lookup(?ptab, #pk_acked_out{c = C, l = Local, r = Site}) of
     [Clock] -> Clock;
     []      -> 0
+  end.
+
+-spec hooks_ran(#s{}) -> clock().
+hooks_ran(#s{cluster = Cluster, site = Local}) ->
+  case classy_table:lookup(?ptab, #pk_hooks_ran{c = Cluster, l = Local}) of
+    [Clock] ->
+      Clock;
+    [] ->
+      0
   end.
 
 -spec set_acked_in(classy:site(), clock(), #s{}) -> ok.
