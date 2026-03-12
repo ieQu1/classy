@@ -17,6 +17,7 @@
         , get_data/4
         , site_of_node/2
         , cleanup/3
+        , flush/2
         ]).
 
 %% behavior callbacks:
@@ -97,6 +98,7 @@
 
 -record(call_set, {target :: classy:site(), k :: site_prop(), v :: term()}).
 -record(call_cleanup, {forget_after :: pos_integer()}).
+-record(call_sync, {}).
 -record(call_get_data, {since :: clock(), acked :: clock()}).
 
 -record(s,
@@ -191,6 +193,11 @@ site_of_node(Cluster, Local) ->
 cleanup(Cluster, Local, ForgetAfter) ->
   gen_server:call(?via(Cluster, Local), #call_cleanup{forget_after = ForgetAfter}).
 
+%% @doc Force sending of events and execution of hooks.
+-spec flush(classy:cluster_id(), classy:site()) -> ok.
+flush(Cluster, Local) ->
+  gen_server:call(?via(Cluster, Local), #call_sync{}).
+
 %%================================================================================
 %% Internal exports
 %%================================================================================
@@ -254,6 +261,9 @@ handle_call(#call_get_data{since = Since, acked = Acked}, _From, S) ->
 handle_call(#call_cleanup{forget_after = FA}, _From, S) ->
   Reply = handle_cleanup(FA, S),
   {reply, Reply, S};
+handle_call(#call_sync{}, _From, S0) ->
+  S = handle_sync(S0),
+  {reply, ok, S};
 handle_call(_Call, _From, S) ->
   {reply, {error, unknown_call}, S}.
 
@@ -267,10 +277,7 @@ handle_cast(_Cast, S) ->
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
 handle_info(#to_sync_out{}, S0) ->
-  S1 = S0#s{sync_timer = undefined},
-  ok = classy_table:flush(?ptab),
-  S = handle_sync_out(S1),
-  run_hooks(S),
+  S = handle_sync(S0#s{sync_timer = undefined}),
   {noreply, need_sync(S)};
 handle_info(_Info, S) ->
   {noreply, S}.
@@ -281,6 +288,12 @@ terminate(_Reason, #s{}) ->
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+handle_sync(S0) ->
+  ok = classy_table:flush(?ptab),
+  S = handle_sync_out(S0),
+  run_hooks(S),
+  S.
 
 %% @doc Total order of the operation.
 %%
@@ -410,8 +423,11 @@ merge(LTime, Op, S) ->
 run_hooks(S = #s{clock = C, cluster = Cluster, site = Local}) ->
   UpdatedEntries = memtab_since(hooks_ran(S) + 1, S),
   lists:foreach(
-    fun(Op = #op_set{target = Peer}) ->
-        classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, state(Op)])
+    fun(Op = #op_set{target = Peer, k = ?mem}) ->
+        IsUp = state(Op),
+        classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, IsUp]);
+       (#op_set{}) ->
+        ok
     end,
     UpdatedEntries),
   classy_table:write(?ptab, #pk_hooks_ran{c = Cluster, l = Local}, C).

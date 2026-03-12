@@ -9,8 +9,8 @@
 -export([ start_link/0
         , nodes_of_cluster/1
         , maybe_init_the_site/2
-        , join_node/1
-        , kick_site/1
+        , join_node/2
+        , kick_site/2
         , the_site/0
         , the_cluster/0
         ]).
@@ -36,8 +36,8 @@
 -define(the_site, the_site).
 -define(the_cluster, the_cluster).
 
--record(call_join, {node :: node()}).
--record(call_kick, {site :: classy:site()}).
+-record(call_join, {node :: node(), intent :: term()}).
+-record(call_kick, {site :: classy:site(), intent :: term()}).
 -record(cast_membership_change,
         { cluster :: classy:cluster_id()
         , local :: classy:site()
@@ -81,13 +81,19 @@ the_site() ->
     []  -> undefined
   end.
 
--spec join_node(node()) -> ok | {error, _}.
-join_node(Node) ->
-  gen_server:call(?SERVER, #call_join{node = Node}, infinity).
+-spec join_node(node(), _Intent) -> ok | {error, _}.
+join_node(Node, Intent) ->
+  gen_server:call(
+    ?SERVER,
+    #call_join{node = Node, intent = Intent},
+    infinity).
 
--spec kick_site(classy:site()) -> ok | {error, _}.
-kick_site(Site) ->
-  gen_server:call(?SERVER, #call_kick{site = Site}, infinity).
+-spec kick_site(classy:site(), _Intent) -> ok | {error, _}.
+kick_site(Site, Intent) ->
+  gen_server:call(
+    ?SERVER,
+    #call_kick{site = Site, intent = Intent},
+    infinity).
 
 %%================================================================================
 %% behavior callbacks
@@ -123,19 +129,19 @@ init(_) ->
       {stop, default_site_not_initialized, undefined}
   end.
 
-handle_call(#call_join{node = Node}, _From, S0) ->
-  case handle_join(Node, S0) of
+handle_call(#call_join{node = Node, intent = Intent}, _From, S0) ->
+  case handle_join(Node, S0, Intent) of
     {ok, S} ->
       {reply, ok, S};
     Err ->
       {reply, Err, S0}
   end;
-handle_call(#call_kick{site = Target}, _From, S) ->
+handle_call(#call_kick{site = Target, intent = Intent}, _From, S) ->
   Ret =
     maybe
       {ok, Cluster} ?= the_cluster(),
       {ok, Local} ?= the_site(),
-      handle_kick(Cluster, Local, Target)
+      handle_kick(Cluster, Local, Target, Intent)
     else
       _ -> {error, local_not_in_cluster}
     end,
@@ -202,32 +208,33 @@ handle_membership_change_event(
       ?tp(warning, classy_kicked_remotely,
           #{ cluster => Cluster
            }),
-      on_leave(S);
+      on_leave(S, kicked);
      true ->
       S
   end.
 
-handle_kick(Cluster, Local, Target) ->
-  case classy_hook:all(?on_pre_kick, [Cluster, Local]) of
+handle_kick(Cluster, Local, Target, Intent) ->
+  case classy_hook:all(?on_pre_kick, [Cluster, Target, Intent]) of
     ok ->
-      classy_membership:set_member(Cluster, Local, Target, false);
+      Ret = classy_membership:set_member(Cluster, Local, Target, false),
+      classy_membership:flush(Cluster, Local),
+      Ret;
     Err ->
       Err
   end.
 
-handle_join(Node, S0) ->
+handle_join(Node, S, Intent) ->
   case rpc:call(Node, ?MODULE, hello, [], rpc_timeout()) of
     #{ site := Remote
      , cluster := Cluster
-     , pid := RemotePid
+     , pid := _RemotePid
      , mem_data := MemData
      } ->
-      S = monitor_site(Remote, RemotePid, S0),
-      case classy_hook:all(?on_pre_join, [Cluster, Remote, Node]) of
+      case classy_hook:all(?on_pre_join, [Cluster, Remote, Node, Intent]) of
         ok ->
           do_join_node(Node, Cluster, Remote, MemData, S);
-        Err ->
-          {ok, demonitor_site(Remote, Node, S)}
+        {error, _} = Err ->
+          Err
       end;
     Err ->
       {error, Err}
@@ -249,10 +256,11 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
       %% status and trigger re-sync (do we need to re-run hooks?):
       classy_membership:cast_sync(Cluster, Local, MemData),
       classy_membership:set_member(Cluster, Local, Local, true),
+      classy_membership:flush(Cluster, Local),
       {ok, S0};
     {ok, OldCluster} when OldCluster =/= Cluster ->
       %% Site is currently in a different cluster. Leave it first:
-      case leave_cluster(OldCluster, Local, S0) of
+      case leave_cluster(OldCluster, Local, S0, join) of
         {ok, S} ->
           do_join_node(Node, Cluster, Remote, MemData, S);
         Err ->
@@ -264,17 +272,17 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
       do_join_node(Node, Cluster, Remote, MemData, S)
   end.
 
-leave_cluster(Cluster, Local, S) ->
-  case handle_kick(Cluster, Local, Local) of
+leave_cluster(Cluster, Local, S, Intent) ->
+  case handle_kick(Cluster, Local, Local, Intent) of
     ok ->
-      {ok, on_leave(S)};
+      {ok, on_leave(S, Intent)};
     Err ->
       Err
   end.
 
-on_leave(S = #s{cluster = Cluster, site = Local}) ->
+on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
   classy_table:delete(?ptab, ?the_cluster),
-  classy_hook:foreach(?on_post_leave, [Cluster, Local]),
+  classy_hook:foreach(?on_post_kick, [Cluster, Local, Intent]),
   S#s{ cluster = undefined
      }.
 

@@ -1,0 +1,7 @@
+#!/bin/sh
+set -euo pipefail
+sname="${1}"
+dir="test_data/${sname}"
+mkdir -p "${dir}"
+ERL_FLAGS="-kernel logger -proto_dist inet_tcp_proxy" rebar3 as test shell --sname "${sname}" --apps inet_tcp_proxy_dist \
+         --eval "application:set_env(classy, table_dir, \"${dir}\"), application:ensure_all_started(classy)."

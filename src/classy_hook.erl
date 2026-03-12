@@ -59,11 +59,12 @@ init() ->
     end,
     100),
   classy:pre_join(
-    fun(Cluster, Remote, Node) ->
+    fun(Cluster, Remote, Node, UserArg) ->
         ?tp(debug, classy_pre_join_node,
             #{ cluster => Cluster
              , remote => Remote
              , remote_node => Node
+             , user_arg => UserArg
              }),
         ok
     end,

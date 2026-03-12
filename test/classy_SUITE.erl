@@ -51,7 +51,9 @@ t_join(Conf) ->
           ?ON(N2, classy:sites())),
        %% Join the nodes:
        ?tp(notice, test_join_n2, RuntimeData),
-       ?assertMatch(ok, classy_ct:rpc(N2, classy, join_node, [maps:get(node, N1)])),
+       ?assertMatch(
+          ok,
+          ?ON(N2, classy:join_node(maps:get(node, N1), join))),
        wait_site_joined(Nodes, Cluster1, Site2),
        %% Verify state after join:
        ?assertEqual(
@@ -93,8 +95,8 @@ t_kick(Conf) ->
         } = ?ON(N1, classy_node:hello()),
        #{site := Site2} = ?ON(N2, classy_node:hello()),
        #{site := Site3} = ?ON(N3, classy_node:hello()),
-       ?assertMatch(ok, ?ON(N2, classy:join_node(Node1))),
-       ?assertMatch(ok, ?ON(N3, classy:join_node(Node1))),
+       ?assertMatch(ok, ?ON(N2, classy:join_node(Node1, join))),
+       ?assertMatch(ok, ?ON(N3, classy:join_node(Node1, join))),
        wait_site_joined(Nodes, Cluster1, Site2),
        wait_site_joined(Nodes, Cluster1, Site3),
        %% Verify state:
@@ -103,7 +105,7 @@ t_kick(Conf) ->
            ?ON(Node, classy:sites()))
         || Node <- Nodes],
        %% Kick N1 from the cluster from N3:
-       ?assertMatch(ok, ?ON(N3, classy:kick_node(Node1))),
+       ?assertMatch(ok, ?ON(N3, classy:kick_node(Node1, force))),
        wait_site_kicked(Nodes, Cluster1, Site1),
        %% Verify state:
        [?assertSameSet(
@@ -125,7 +127,7 @@ t_kick(Conf) ->
 
 %% Verify that node can be kicked from the cluster while down:
 t_kick_in_absentia(Conf) ->
-  [C1 | _]= Cluster = classy_ct:cluster([#{}, #{}, #{}], []),
+  [C1 | _] = Cluster = classy_ct:cluster([#{}, #{}, #{}], []),
   ?check_trace(
      try
        %% Prepare the system:
@@ -135,14 +137,14 @@ t_kick_in_absentia(Conf) ->
         } = classy_ct:rpc(N1, classy_node, hello, []),
        #{site := Site2} = ?ON(N2, classy_node:hello()),
        #{site := Site3} = ?ON(N3, classy_node:hello()),
-       ?assertMatch(ok, ?ON(N2, classy:join_node(Node1))),
-       ?assertMatch(ok, ?ON(N3, classy:join_node(Node1))),
+       ?assertMatch(ok, ?ON(N2, classy:join_node(Node1, join))),
+       ?assertMatch(ok, ?ON(N3, classy:join_node(Node1, join))),
        wait_site_joined(Nodes, Cluster1, Site2),
        wait_site_joined(Nodes, Cluster1, Site3),
        %% Stop N1:
        classy_ct:stop_peer(N1),
        %% Kick N1 from the cluster from N3:
-       ?assertMatch(ok, ?ON(N3, classy:kick_node(Node1))),
+       ?assertMatch(ok, ?ON(N3, classy:kick_node(Node1, kick))),
        wait_site_kicked([N2, N3], Cluster1, Site1),
        %% Verify state:
        [?assertSameSet(
@@ -170,6 +172,51 @@ t_kick_in_absentia(Conf) ->
      end,
      [
      ]).
+
+%% Verify that join and kick can be forbidden via hooks:
+t_pre_checks(Conf) ->
+  Cluster = classy_ct:cluster([#{}, #{}], []),
+  ?check_trace(
+     try
+       %% Prepare the system:
+       Nodes = [N1 = #{node := Node1}, N2 = #{node := Node2}]
+         = classy_ct:start_cluster(classy, Cluster),
+       ?ON(N1, classy:pre_join(
+                 fun(_Cluster, _Remote, _Node, Intent) ->
+                     case Intent of
+                       force -> ok;
+                       _ -> {error, forbidden}
+                     end
+                 end,
+                 0)),
+       ?ON(N2, classy:pre_kick(
+                 fun(_Cluster, _Remote, Intent) ->
+                     case Intent of
+                       force -> ok;
+                       _ -> {error, forbidden}
+                     end
+                 end,
+                 0)),
+       %% Join is forbidden:
+       ?assertEqual(
+          {error, forbidden},
+          ?ON(N1, classy:join_node(Node2, join))),
+       %% Force join:
+       ?assertEqual(
+          ok,
+          ?ON(N1, classy:join_node(Node2, force))),
+       %% Kick is forbidden:
+       ?assertEqual(
+          {error, forbidden},
+          ?ON(N2, classy:kick_node(Node1, kick))),
+       %% Force kick:
+       ?assertEqual(
+          ok,
+          ?ON(N2, classy:kick_node(Node1, force)))
+     after
+       classy_ct:teardown_cluster(Cluster)
+     end,
+     []).
 
 %%================================================================================
 %% Internal functions

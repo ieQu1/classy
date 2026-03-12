@@ -4,9 +4,9 @@
 -module(classy).
 
 %% API:
--export([ join_node/1
-        , kick_site/1
-        , kick_node/1
+-export([ join_node/2
+        , kick_site/2
+        , kick_node/2
         , sites/0
         ]).
 
@@ -18,7 +18,7 @@
         , pre_join/2
         , post_join/2
         , pre_kick/2
-        , post_leave/2
+        , post_kick/2
         ]).
 
 -export_type([ cluster_id/0
@@ -26,8 +26,6 @@
 
              , site_status_hook/0
              , membership_change_hook/0
-             , pre_cluster_hook/0
-             , post_cluster_hook/0
              ]).
 
 -include("classy_internal.hrl").
@@ -44,9 +42,12 @@
 
 -type membership_change_hook() :: fun((cluster_id(), _Local :: site(), _Remote :: site(), _IsMember :: boolean()) -> _).
 
--type pre_cluster_hook() :: fun((cluster_id(), _Local :: site()) -> ok | {error, string()}).
+-type join_intent() :: join
+                     | _.
 
--type post_cluster_hook() :: fun((cluster_id(), _Local :: site()) -> _).
+-type kick_intent() :: join   %% Intent set by system when site leaves the cluster to join another one
+                     | kicked %% Intent set by system when site is kicked by the third party
+                     | _.
 
 %%================================================================================
 %% API functions
@@ -56,21 +57,21 @@
 %% Cluster management
 %%--------------------------------------------------------------------------------
 
--spec join_node(node()) -> ok | {error, _}.
-join_node(Node) ->
-  classy_node:join_node(Node).
+-spec join_node(node(), join_intent()) -> ok | {error, _}.
+join_node(Node, Intent) ->
+  classy_node:join_node(Node, Intent).
 
--spec kick_site(site()) -> ok | {error, _}.
-kick_site(Site) ->
-  classy_node:kick_site(Site).
+-spec kick_site(site(), kick_intent()) -> ok | {error, _}.
+kick_site(Site, Intent) ->
+  classy_node:kick_site(Site, Intent).
 
--spec kick_node(node()) -> ok | {error, _}.
-kick_node(Node) ->
+-spec kick_node(node(), kick_intent()) -> ok | {error, _}.
+kick_node(Node, Intent) ->
   case {classy_node:the_cluster(), classy_node:the_site()} of
     {{ok, Cluster}, {ok, Local}} ->
       case classy_membership:site_of_node(Cluster, Local) of
         #{Node := Site} ->
-          kick_site(Site);
+          kick_site(Site, Intent);
         #{} ->
           {error, target_not_in_cluster}
       end;
@@ -132,10 +133,10 @@ on_membership_change(Hook, Prio) ->
 %% remote site and/or cluster. WARNING: this hook should not have side
 %% effects. It should only check if it is ok to join.
 -spec pre_join(
-        fun((classy:cluster_id(), Remote, node()) -> ok | {error, _}),
+        fun((classy:cluster_id(), Remote, node(), join_intent()) -> ok | {error, _}),
         classy_hook:prio()
        ) -> ok
-   when Remote :: classy:site().
+  when Remote :: site().
 pre_join(Hook, Prio) ->
   classy_hook:insert(?on_pre_join, Hook, Prio).
 
@@ -145,7 +146,7 @@ pre_join(Hook, Prio) ->
         fun((classy:cluster_id(), Local) -> _),
         classy_hook:prio()
        ) -> ok
-   when Local :: classy:site().
+  when Local :: classy:site().
 post_join(Hook, Prio) ->
   classy_hook:insert(?on_post_join, Hook, Prio).
 
@@ -154,16 +155,24 @@ post_join(Hook, Prio) ->
 %% the kick.
 %%
 %% WARNING: this hook cannot have side effects.
--spec pre_kick(pre_cluster_hook(), classy_hook:prio()) -> ok.
+-spec pre_kick(
+        fun((cluster_id(), Remote, kick_intent()) -> ok | {error, _}),
+        classy_hook:prio()
+       ) -> ok
+  when Remote :: site().
 pre_kick(Hook, Prio) ->
   classy_hook:insert(?on_pre_kick, Hook, Prio).
 
 %% @doc Register a hook that is executed after a local site leaves a
 %% cluster. This hook can perform destructive actions associated with
 %% cleanup.
--spec post_leave(post_cluster_hook(), classy_hook:prio()) -> ok.
-post_leave(Hook, Prio) ->
-  classy_hook:insert(?on_post_leave, Hook, Prio).
+-spec post_kick(
+        fun((cluster_id(), Local, kick_intent()) -> _),
+        classy_hook:prio()
+       ) -> ok
+  when Local :: site().
+post_kick(Hook, Prio) ->
+  classy_hook:insert(?on_post_kick, Hook, Prio).
 
 %%================================================================================
 %% Internal exports

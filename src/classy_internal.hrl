@@ -26,6 +26,6 @@
 -define(on_pre_join, on_pre_join).
 -define(on_post_join, on_post_join).
 -define(on_pre_kick, on_pre_kick).
--define(on_post_leave, on_post_leave).
+-define(on_post_kick, on_post_leave).
 
 -endif.
