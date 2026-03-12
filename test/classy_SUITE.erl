@@ -9,6 +9,10 @@
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
+-define(ON(NODE, BODY), classy_ct:rpc(NODE, erlang, apply, [fun() -> BODY end, []])).
+
+-define(assertSameSet(EXP, GOT), ?assertEqual(lists:sort(EXP), lists:sort(GOT))).
+
 %%================================================================================
 %% Tests
 %%================================================================================
@@ -22,10 +26,10 @@ t_join(Conf) ->
        Nodes = [N1, N2] = classy_ct:start_cluster(classy, Cluster),
        #{ site := Site1
         , cluster := Cluster1
-        } = classy_ct:rpc(N1, classy_node, hello, []),
+        } = ?ON(N1, classy_node:hello()),
        #{ site := Site2
         , cluster := Cluster2
-        } = classy_ct:rpc(N2, classy_node, hello, []),
+        } = ?ON(N2, classy_node:hello()),
        RuntimeData = #{ nodes => Nodes
                       , sites => [Site1, Site2]
                       , clusters => [Cluster1, Cluster2]
@@ -35,16 +39,16 @@ t_join(Conf) ->
        %% cluster ID should be equal to the site id:
        ?assertEqual(
           {ok, Cluster1},
-          classy_ct:rpc(N1, classy_node, the_cluster, [])),
+          ?ON(N1, classy_node:the_cluster())),
        ?assertEqual(
           [Site1],
-          classy_ct:rpc(N1, classy, sites, [])),
+          ?ON(N1, classy:sites())),
        ?assertEqual(
           {ok, Cluster2},
-          classy_ct:rpc(N2, classy_node, the_cluster, [])),
+          ?ON(N2, classy_node:the_cluster())),
        ?assertEqual(
           [Site2],
-          classy_ct:rpc(N2, classy, sites, [])),
+          ?ON(N2, classy:sites())),
        %% Join the nodes:
        ?tp(notice, test_join_n2, RuntimeData),
        ?assertMatch(ok, classy_ct:rpc(N2, classy, join_node, [maps:get(node, N1)])),
@@ -52,16 +56,16 @@ t_join(Conf) ->
        %% Verify state after join:
        ?assertEqual(
           {ok, Cluster1},
-          classy_ct:rpc(N1, classy_node, the_cluster, [])),
+          ?ON(N1, classy_node:the_cluster())),
        ?assertEqual(
           {ok, Cluster1},
-          classy_ct:rpc(N2, classy_node, the_cluster, [])),
-       ?assertEqual(
-          lists:sort([Site1, Site2]),
-          lists:sort(classy_ct:rpc(N1, classy, sites, []))),
-       ?assertEqual(
-          lists:sort([Site1, Site2]),
-          lists:sort(classy_ct:rpc(N2, classy, sites, []))),
+          ?ON(N2, classy_node:the_cluster())),
+       ?assertSameSet(
+          [Site1, Site2],
+          ?ON(N1, classy:sites())),
+       ?assertSameSet(
+          [Site1, Site2],
+          ?ON(N2, classy:sites())),
        RuntimeData
      after
        classy_ct:teardown_cluster(Cluster)
@@ -86,29 +90,29 @@ t_kick(Conf) ->
        Nodes = [N1 = #{node := Node1}, N2, N3] = classy_ct:start_cluster(classy, Cluster),
        #{ site := Site1
         , cluster := Cluster1
-        } = classy_ct:rpc(N1, classy_node, hello, []),
-       #{site := Site2} = classy_ct:rpc(N2, classy_node, hello, []),
-       #{site := Site3} = classy_ct:rpc(N3, classy_node, hello, []),
-       ?assertMatch(ok, classy_ct:rpc(N2, classy, join_node, [Node1])),
-       ?assertMatch(ok, classy_ct:rpc(N3, classy, join_node, [Node1])),
+        } = ?ON(N1, classy_node:hello()),
+       #{site := Site2} = ?ON(N2, classy_node:hello()),
+       #{site := Site3} = ?ON(N3, classy_node:hello()),
+       ?assertMatch(ok, ?ON(N2, classy:join_node(Node1))),
+       ?assertMatch(ok, ?ON(N3, classy:join_node(Node1))),
        wait_site_joined(Nodes, Cluster1, Site2),
        wait_site_joined(Nodes, Cluster1, Site3),
        %% Verify state:
-       [?assertEqual(
-           lists:sort([Site1, Site2, Site3]),
-           lists:sort(classy_ct:rpc(Node, classy, sites, [])))
+       [?assertSameSet(
+           [Site1, Site2, Site3],
+           ?ON(Node, classy:sites()))
         || Node <- Nodes],
        %% Kick N1 from the cluster from N3:
-       ?assertMatch(ok, classy_ct:rpc(N3, classy, kick_node, [Node1])),
+       ?assertMatch(ok, ?ON(N3, classy:kick_node(Node1))),
        wait_site_kicked(Nodes, Cluster1, Site1),
        %% Verify state:
-       [?assertEqual(
-           lists:sort([Site2, Site3]),
-           lists:sort(classy_ct:rpc(Node, classy, sites, [])))
+       [?assertSameSet(
+           [Site2, Site3],
+           ?ON(Node, classy:sites()))
         || Node <- [N2, N3]],
        ?assertEqual(
           [],
-          classy_ct:rpc(N1, classy, sites, [])),
+          ?ON(N1, classy:sites())),
        #{ nodes => Nodes
         , sites => [Site1, Site2, Site3]
         , clusters => [Cluster1]
@@ -129,34 +133,34 @@ t_kick_in_absentia(Conf) ->
        #{ site := Site1
         , cluster := Cluster1
         } = classy_ct:rpc(N1, classy_node, hello, []),
-       #{site := Site2} = classy_ct:rpc(N2, classy_node, hello, []),
-       #{site := Site3} = classy_ct:rpc(N3, classy_node, hello, []),
-       ?assertMatch(ok, classy_ct:rpc(N2, classy, join_node, [Node1])),
-       ?assertMatch(ok, classy_ct:rpc(N3, classy, join_node, [Node1])),
+       #{site := Site2} = ?ON(N2, classy_node:hello()),
+       #{site := Site3} = ?ON(N3, classy_node:hello()),
+       ?assertMatch(ok, ?ON(N2, classy:join_node(Node1))),
+       ?assertMatch(ok, ?ON(N3, classy:join_node(Node1))),
        wait_site_joined(Nodes, Cluster1, Site2),
        wait_site_joined(Nodes, Cluster1, Site3),
        %% Stop N1:
        classy_ct:stop_peer(N1),
        %% Kick N1 from the cluster from N3:
-       ?assertMatch(ok, classy_ct:rpc(N3, classy, kick_node, [Node1])),
+       ?assertMatch(ok, ?ON(N3, classy:kick_node(Node1))),
        wait_site_kicked([N2, N3], Cluster1, Site1),
        %% Verify state:
-       [?assertEqual(
-           lists:sort([Site2, Site3]),
-           lists:sort(classy_ct:rpc(Node, classy, sites, [])))
+       [?assertSameSet(
+           [Site2, Site3],
+           ?ON(Node, classy:sites()))
         || Node <- [N2, N3]],
        %% Bring N1 back up:
        N1_1 = classy_ct:start_peer(classy, C1),
        %% It should process the information about getting kicked:
        wait_site_kicked([N1_1], Cluster1, Site1),
        %% It should not reappear in the sites list:
-       [?assertEqual(
-           lists:sort([Site2, Site3]),
-           lists:sort(classy_ct:rpc(Node, classy, sites, [])))
+       [?assertSameSet(
+           [Site2, Site3],
+           ?ON(Node, classy:sites()))
         || Node <- [N2, N3]],
        ?assertEqual(
           [],
-          classy_ct:rpc(N1, classy, sites, [])),
+          ?ON(N1, classy:sites())),
        #{ nodes => Nodes
         , sites => [Site1, Site2, Site3]
         , clusters => [Cluster1]
@@ -166,7 +170,6 @@ t_kick_in_absentia(Conf) ->
      end,
      [
      ]).
-
 
 %%================================================================================
 %% Internal functions
@@ -204,24 +207,15 @@ initialization_hooks(RuntimeData, Trace) ->
    , sites := Sites
    , clusters := Clusters
    } = RuntimeData,
-  ?assertEqual(
-     lists:sort([maps:get(node, I) || I <- Nodes]),
-     lists:sort(
-       ?projection(
-          node,
-          ?of_kind(classy_on_node_init, Trace)))),
-  ?assertEqual(
-     lists:sort(Sites),
-     lists:sort(
-       ?projection(
-          site,
-          ?of_kind(classy_create_new_site, Trace)))),
-  ?assertEqual(
-     lists:sort(Clusters),
-     lists:sort(
-       ?projection(
-          cluster,
-          ?of_kind(classy_create_new_cluster, Trace)))).
+  ?assertSameSet(
+     [maps:get(node, I) || I <- Nodes],
+     ?projection(node, ?of_kind(classy_on_node_init, Trace))),
+  ?assertSameSet(
+     Sites,
+     ?projection(site, ?of_kind(classy_create_new_site, Trace))),
+  ?assertSameSet(
+     Clusters,
+     ?projection(cluster, ?of_kind(classy_create_new_cluster, Trace))).
 
 end_per_testcase(_, _) ->
   snabbkaffe:stop().

@@ -95,7 +95,7 @@ start_peer(
                      , single_line => false
                      },
   rpc(Ret, logger, update_formatter_config, [default, FormatterConfig]),
-  LogLevel = list_to_atom(os:getenv("LOG_LEVEL", "notice")),
+  LogLevel = list_to_atom(os:getenv("LOGLEVEL", "notice")),
   rpc(Ret, logger, update_primary_config, [#{level => LogLevel}]),
   rpc(Ret, logger, update_handler_config, [default, #{level => LogLevel}]),
   {ok, _} = rpc(Ret, application, ensure_all_started, [inet_tcp_proxy_dist]),
