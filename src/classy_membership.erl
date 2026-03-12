@@ -4,14 +4,20 @@
 
 %% @doc Cluster Membership CRDT
 %%
-%% This module provides low-level API for maintaining and updating cluster membership information.
+%% This module provides a low-level API for maintaining and updating cluster membership information.
 %% Business code should not use it directly.
 -module(classy_membership).
 
 -behavior(gen_server).
 
 %% API:
--export([set_member/4, members/2, list_local_sites/1, get_data/4, site_of_node/2]).
+-export([ set_member/4
+        , members/2
+        , list_local_sites/1
+        , get_data/4
+        , site_of_node/2
+        , cleanup/3
+        ]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -55,18 +61,18 @@
 -type magic() :: term().
 
 %% The following command is used to update status of `target' site:
--record(op_set, {origin, target, k, c, m, val, owt}).
+-record(op_set, {origin, target, k, c, m, val, owt, reserved}).
 
 -type op() ::
         #op_set{ origin :: classy:site() %% Site that issued the command
                , target :: classy:site() %% Site which is being updated
-               , k :: site_prop() %% Property of the target site that is being updated
-               , c :: clock() %% Logical time at `origin' when it issued the command:
-               , m :: magic() %% This term can be used to break ties
-               , val :: term() %% Updated value
-               , owt :: integer() %% Origin's wall time when the update was made. This value
-                                  %% isn't used by this module directly, but it gives hints to
-                                  %% the autoclean:
+               , k :: site_prop()        %% Property of the target site that is being updated
+               , c :: clock()            %% Logical time at `origin' when it issued the command:
+               , m :: magic()            %% This term can be used to break ties
+               , val :: term()           %% Updated value
+               , owt :: integer()        %% Origin's wall time when the update was made. This value
+                                         %% isn't used by this module directly, but it gives hints to
+                                         %% the autoclean
                }.
 
 %% Projection of `op()` fields used to establish total order of logs.
@@ -90,6 +96,7 @@
 -record(to_sync_out, {}).
 
 -record(call_set, {target :: classy:site(), k :: site_prop(), v :: term()}).
+-record(call_cleanup, {forget_after :: pos_integer()}).
 -record(call_get_data, {since :: clock(), acked :: clock()}).
 
 -record(s,
@@ -170,6 +177,12 @@ list_local_sites(all) ->
 site_of_node(Cluster, Local) ->
   maps:from_list(select_nodes(Cluster, Local, {{'$2', '$1'}})).
 
+%% @doc Delete sites that have been kicked for longer than
+%% `ForgetAfter' from the local state.
+-spec cleanup(classy:cluster_id(), classy:site(), pos_integer()) -> ok.
+cleanup(Cluster, Local, ForgetAfter) ->
+  gen_server:call(?via(Cluster, Local), #call_cleanup{forget_after = ForgetAfter}).
+
 %%================================================================================
 %% Internal exports
 %%================================================================================
@@ -230,6 +243,9 @@ handle_call(#call_set{} = CMD, _From, S0) ->
   {reply, ok, S};
 handle_call(#call_get_data{since = Since, acked = Acked}, _From, S) ->
   {reply, get_sync_data(Since, Acked, S), S};
+handle_call(#call_cleanup{forget_after = FA}, _From, S) ->
+  Reply = handle_cleanup(FA, S),
+  {reply, Reply, S};
 handle_call(_Call, _From, S) ->
   {reply, {error, unknown_call}, S}.
 
@@ -396,6 +412,79 @@ run_hooks(S = #s{cluster = Cluster, site = Local}) ->
         end
     end,
     peers(S)).
+
+-spec handle_cleanup(pos_integer(), #s{}) -> ok.
+handle_cleanup(ForgetAfter, S) ->
+  Sites = sites_for_cleanup(ForgetAfter, S),
+  ?tp(debug, classy_membership_forget,
+      #{ interval => ForgetAfter
+       , sites => Sites
+       }),
+  [forget_site(I, S) || I <- Sites],
+  ok.
+
+%% @doc Return list of peers that can be forgotten, according to the
+%% following criteria:
+%%
+%% 1. Peer has been kicked from the cluster
+%% 2. It happened at least SecsDown ago
+%% 3. Other active peers have received all data about the peer
+-spec sites_for_cleanup(integer(), #s{}) -> [classy:site()].
+sites_for_cleanup(SecsDown, S) ->
+  MinTimeWhenKicked = time_s() - SecsDown,
+  MinUnacked = min_unacked(MinTimeWhenKicked, S),
+  SitesWithoutRecentUpdates = peers(S) -- recently_updated(MinUnacked, S),
+  lists:filter(
+    fun(Peer) ->
+        is_long_gone(MinTimeWhenKicked, Peer, S)
+    end,
+    SitesWithoutRecentUpdates).
+
+forget_site(Site, #s{cluster = Cluster, site = Local}) when is_binary(Site) ->
+  MSLast = #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = Site, _ = '_'}
+                     , _ = '_'
+                     },
+  ets:match_delete(?ptab, MSLast),
+  ets:delete(?ptab, #pk_acked_in{c = Cluster, l = Local, r = Site}),
+  ets:delete(?ptab, #pk_acked_out{c = Cluster, l = Local, r = Site}),
+  ok.
+
+%% @doc Return list of sites that have `tou' greater then `MinTou' for
+%% any property
+-spec recently_updated(clock(), #s{}) -> [classy:site()].
+recently_updated(MinTou, #s{cluster = Cluster, site = Local}) ->
+  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1', _ = '_'}
+                   , v = #pv_last{tou = '$2', _ = '_'}
+                   , _ = '_'
+                   }
+       , [{'>=', '$2', MinTou}]
+       , ['$1']
+       },
+  lists:usort(ets:select(?ptab, [MS])).
+
+-spec min_unacked(pos_integer(), #s{}) -> clock() | undefined.
+min_unacked(MinTimeWhenKicked, S) ->
+  lists:foldl(
+    fun(Peer, Acc) ->
+        case is_long_gone(MinTimeWhenKicked, Peer, S) of
+          true ->
+            Acc;
+          false ->
+            min(get_acked_out(Peer, S), Acc)
+        end
+    end,
+    undefined,
+    peers(S)).
+
+-spec is_long_gone(pos_integer(), classy:site(), #s{}) -> boolean().
+is_long_gone(MinTimeWhenKicked, Site, S) ->
+  case memtab_lookup(Site, ?mem, S) of
+    {ok, #op_set{val = false, owt = TimeWhenKicked}} when
+        TimeWhenKicked < MinTimeWhenKicked ->
+      true;
+    _ ->
+      false
+  end.
 
 %%--------------------------------------------------------------------------------
 %% Interface for site state storage
@@ -606,6 +695,70 @@ table_scans_test() ->
         #{<<"s1">> => 'n1@localhost', <<"s2">> => 'n2@localhost'},
         nodes_of_cluster(S))
      || S <- [S1, S2]]
+  after
+    classy_table:drop(?ptab),
+    classy_table_tests:cleanup(Cleanup)
+  end.
+
+is_long_gone_test() ->
+  Cleanup = classy_table_tests:setup(?FUNCTION_NAME),
+  S1 = #s{cluster = <<"c1">>, site = <<"s1">>},
+  S2 = #s{cluster = <<"c2">>, site = <<"s2">>},
+  try
+    classy_table:open(?ptab, #{}),
+    [begin
+       true = merge(
+                0,
+                #op_set{ origin = <<"s1">>
+                       , target = <<"s1">>
+                       , k = ?mem
+                       , val = true
+                       , owt = 0
+                       },
+                S),
+       true = merge(
+                0,
+                #op_set{ origin = <<"s1">>
+                       , target = <<"s2">>
+                       , k = ?mem
+                       , val = false
+                       , owt = 1
+                       },
+                S),
+       true = merge(
+                0,
+                #op_set{ origin = <<"s1">>
+                       , target = <<"s3">>
+                       , k = ?mem
+                       , val = true
+                       , owt = 1
+                       },
+                S),
+       true = merge(
+                0,
+                #op_set{ origin = <<"s1">>
+                       , target = <<"s4">>
+                       , k = ?mem
+                       , val = false
+                       , owt = 2
+                       },
+                S),
+       %% T = 3:
+       ?assertNot(is_long_gone(3, <<"s1">>, S)),
+       ?assert(is_long_gone(3, <<"s2">>, S)),
+       ?assertNot(is_long_gone(3, <<"s3">>, S)),
+       ?assert(is_long_gone(3, <<"s4">>, S)),
+       %% T = 2:
+       ?assertNot(is_long_gone(2, <<"s1">>, S)),
+       ?assert(is_long_gone(2, <<"s2">>, S)),
+       ?assertNot(is_long_gone(2, <<"s3">>, S)),
+       ?assertNot(is_long_gone(2, <<"s4">>, S)),
+       %% T = 1:
+       ?assertNot(is_long_gone(0, <<"s1">>, S)),
+       ?assertNot(is_long_gone(0, <<"s2">>, S)),
+       ?assertNot(is_long_gone(0, <<"s3">>, S)),
+       ?assertNot(is_long_gone(0, <<"s4">>, S))
+     end || S <- [S1, S2]]
   after
     classy_table:drop(?ptab),
     classy_table_tests:cleanup(Cleanup)

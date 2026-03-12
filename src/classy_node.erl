@@ -40,8 +40,8 @@
 -record(call_kick, {site :: classy:site()}).
 -record(cast_membership_change,
         { cluster :: classy:cluster_id()
-        , local :: classy:node()
-        , remote :: classy:node()
+        , local :: classy:site()
+        , remote :: classy:site()
         , member :: boolean()
         }).
 
@@ -94,7 +94,7 @@ kick_site(Site) ->
 %%================================================================================
 
 -record(s,
-        { cluster :: classy:cluster_id()
+        { cluster :: classy:cluster_id() | undefined
         , site :: classy:site()
         }).
 
