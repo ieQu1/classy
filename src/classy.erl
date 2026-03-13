@@ -20,11 +20,13 @@
         , post_join/2
         , pre_kick/2
         , post_kick/2
+        , run_level/2
         ]).
 
 -export_type([ cluster_id/0
              , site/0
 
+             , run_level/0
              , site_status_hook/0
              , membership_change_hook/0
              ]).
@@ -49,6 +51,8 @@
 -type kick_intent() :: join   %% Intent set by system when site leaves the cluster to join another one
                      | kicked %% Intent set by system when site is kicked by the third party
                      | _.
+
+-type run_level() :: stopped | single | cluster.
 
 %%================================================================================
 %% API functions
@@ -204,6 +208,16 @@ pre_kick(Hook, Prio) ->
   when Local :: site().
 post_kick(Hook, Prio) ->
   classy_hook:insert(?on_post_kick, Hook, Prio).
+
+
+%% @doc Register a hook that is executed on change of the run level of
+%% the local site.
+-spec run_level(
+        fun((run_level(), run_level()) -> _),
+        classy_hook:prio()
+       ) -> ok.
+run_level(Hook, Prio) ->
+  classy_hook:insert(?on_change_run_level, Hook, Prio).
 
 %%================================================================================
 %% Internal exports

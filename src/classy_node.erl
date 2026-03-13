@@ -102,6 +102,7 @@ kick_site(Site, Intent) ->
 -record(s,
         { cluster :: classy:cluster_id() | undefined
         , site :: classy:site()
+        , run_level = stopped :: classy:run_level()
         }).
 
 init(_) ->
@@ -120,9 +121,10 @@ init(_) ->
     {ok, Cluster} ?= the_cluster(),
     {ok, Site} ?= the_site(),
     {ok, _} = classy_sup:ensure_membership(Cluster, Site),
-    S = #s{ cluster = Cluster
-          , site = Site
-          },
+    S = adjust_run_level(
+          #s{ cluster = Cluster
+            , site = Site
+            }),
     {ok, S}
   else
     _ ->
@@ -216,6 +218,8 @@ handle_membership_change_event(
           #{ cluster => Cluster
            }),
       on_leave(S, kicked);
+     Cluster =:= ThisCluster ->
+      adjust_run_level(S);
      true ->
       S
   end.
@@ -264,7 +268,7 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
       classy_membership:cast_sync(Cluster, Local, MemData),
       classy_membership:set_member(Cluster, Local, Local, true),
       classy_membership:flush(Cluster, Local),
-      {ok, S0};
+      {ok, adjust_run_level(S0)};
     {ok, OldCluster} when OldCluster =/= Cluster ->
       %% Site is currently in a different cluster. Leave it first:
       case leave_cluster(OldCluster, Local, S0, join) of
@@ -287,13 +291,14 @@ leave_cluster(Cluster, Local, S, Intent) ->
       Err
   end.
 
-on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
+on_leave(S0 = #s{cluster = Cluster, site = Local}, Intent) ->
+  S = change_run_level(?stopped, S0),
   classy_table:delete(?ptab, ?the_cluster),
   classy_hook:foreach(?on_post_kick, [Cluster, Local, Intent]),
   S#s{ cluster = undefined
      }.
 
-join_cluster(Cluster, Local, S) ->
+join_cluster(Cluster, Local, S = #s{run_level = ?stopped}) ->
   {ok, _} = classy_sup:ensure_membership(Cluster, Local),
   classy_hook:foreach(?on_post_join, [Cluster, Local]),
   set_val(?the_cluster, Cluster),
@@ -320,3 +325,36 @@ rpc_timeout() ->
 
 set_val(Key, Val) when is_binary(Val), Key =/= ?the_site orelse Key =/= ?the_cluster ->
   classy_table:write(?ptab, Key, Val).
+
+-spec adjust_run_level(#s{}) -> #s{}.
+adjust_run_level(S = #s{cluster = Cluster, site = Site}) ->
+  NSites = length(classy_membership:members(Cluster, Site)),
+  MinClusterSize = application:get_env(classy, n_sites, 1),
+  RunLevel = if NSites >= MinClusterSize ->
+                 ?cluster;
+                true ->
+                 ?single
+             end,
+  change_run_level(RunLevel, S).
+
+-spec change_run_level(classy:run_level(), #s{}) -> #s{}.
+change_run_level(RL, #s{run_level = RL} = S) ->
+  S;
+%% UP:
+change_run_level(?single, #s{run_level = ?stopped} = S) ->
+  classy_hook:foreach(?on_change_run_level, [?stopped, ?single]),
+  S#s{run_level = ?single};
+change_run_level(?cluster, #s{run_level = ?single} = S) ->
+  classy_hook:foreach(?on_change_run_level, [?single, ?cluster]),
+  S#s{run_level = ?cluster};
+change_run_level(?cluster, #s{run_level = ?stopped} = S) ->
+  change_run_level(?cluster, change_run_level(?single, S));
+%% DOWN:
+change_run_level(?single, #s{run_level = ?cluster} = S) ->
+  classy_hook:foreach(?on_change_run_level, [?cluster, ?single]),
+  S#s{run_level = ?single};
+change_run_level(?stopped, #s{run_level = ?single} = S) ->
+  classy_hook:foreach(?on_change_run_level, [?single, ?stopped]),
+  S#s{run_level = ?stopped};
+change_run_level(?stopped, #s{run_level = ?cluster} = S) ->
+  change_run_level(?stopped, change_run_level(?single, S)).

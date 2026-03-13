@@ -27,5 +27,11 @@
 -define(on_post_join, on_post_join).
 -define(on_pre_kick, on_pre_kick).
 -define(on_post_kick, on_post_leave).
+-define(on_change_run_level, on_change_run_level).
+
+%% Run levels:
+-define(stopped, stopped).
+-define(single, single).
+-define(cluster, cluster).
 
 -endif.

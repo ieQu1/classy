@@ -89,6 +89,14 @@ init() ->
              })
     end,
     100),
+  classy:run_level(
+    fun(From, To) ->
+        ?tp(notice, classy_change_run_level,
+            #{ from => From
+             , to => To
+             })
+    end,
+    -100),
   %% User initializaiton:
   case application:get_env(classy, setup_hooks) of
     {ok, {Mod, Func, Args}} ->

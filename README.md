@@ -53,6 +53,12 @@ Since at step 4 we removed the data about event 2., A will reappear in the clust
 
 So `forget_timeout` should be set to a fairly large value to make sure it doesn't cover nodes that can go back online.
 
+## `classy.n_sites`
+
+Type: `pos_integer()`,
+Default: 1.
+Advance `run_stage` to `cluster` when the cluster contains at least this many sites.
+
 # Setting default site and cluster
 
 By default, classy initializes site to a random value,
