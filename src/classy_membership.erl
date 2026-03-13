@@ -15,9 +15,10 @@
         , members/2
         , list_local_sites/1
         , get_data/4
-        , site_of_node/2
         , cleanup/3
         , flush/2
+        , node_of_site/2
+        , site_of_node/2
         ]).
 
 %% behavior callbacks:
@@ -187,6 +188,10 @@ list_local_sites(all) ->
 site_of_node(Cluster, Local) ->
   maps:from_list(select_nodes(Cluster, Local, {{'$2', '$1'}})).
 
+-spec node_of_site(classy:cluster_id(), classy:site()) -> #{classy:site() => node()}.
+node_of_site(Cluster, Local) ->
+  maps:from_list(select_nodes(Cluster, Local, {{'$1', '$2'}})).
+
 %% @doc Delete sites that have been kicked for longer than
 %% `ForgetAfter' from the local state.
 -spec cleanup(classy:cluster_id(), classy:site(), pos_integer()) -> ok.
@@ -223,8 +228,7 @@ get_data(Cluster, Local, Since, Acked) ->
 init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluster) ->
   process_flag(trap_exit, true),
   logger:update_process_metadata(
-    #{ domain => [classy, membership]
-     , cluster => Cluster
+    #{ cluster => Cluster
      , local => Site
      }),
   ok = classy_table:open(?ptab, #{}),

@@ -106,7 +106,7 @@ kick_site(Site, Intent) ->
 
 init(_) ->
   process_flag(trap_exit, true),
-  logger:update_process_metadata(#{domain => [classy, node]}),
+  %% logger:update_process_metadata(#{domain => [classy, node]}),
   ets:new(?node_tab, [named_table, protected, {keypos, #node_info.node}]),
   net_kernel:monitor_nodes(
     true,
@@ -200,11 +200,18 @@ handle_membership_change_event(
                          },
   S = #s{cluster = ThisCluster, site = ThisSite}
  ) ->
+  ?tp(warning, membership_change,
+      #{ cluster => Cluster
+       , origin => Local
+       , target => Remote
+       , member => Member
+       }),
   if Cluster =:= ThisCluster,
      Local =:= ThisSite,
      Remote =:= ThisSite,
      Member =:= false ->
       %% We got kicked:
+      erlang:display(we_got_kicked),
       ?tp(warning, classy_kicked_remotely,
           #{ cluster => Cluster
            }),
@@ -291,12 +298,6 @@ join_cluster(Cluster, Local, S) ->
   classy_hook:foreach(?on_post_join, [Cluster, Local]),
   set_val(?the_cluster, Cluster),
   {ok, S#s{cluster = Cluster}}.
-
-monitor_site(Site, Node, S) ->
-  S.
-
-demonitor_site(Site, Node, S) ->
-  S.
 
 -spec ensure_value(?the_cluster | ?the_site, ?on_create_cluster | ?on_create_site, binary() | undefined) -> ok.
 ensure_value(Key, OnCreateHook, Default) ->

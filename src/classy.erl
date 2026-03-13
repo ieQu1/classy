@@ -8,6 +8,7 @@
         , kick_site/2
         , kick_node/2
         , sites/0
+        , nodes/1
         ]).
 
 -export([ on_node_init/2
@@ -85,6 +86,36 @@ sites() ->
     {ok, Cluster} ?= classy_node:the_cluster(),
     {ok, Local} ?= classy_node:the_site(),
     classy_membership:members(Cluster, Local)
+  else
+    _ ->
+      []
+  end.
+
+-spec nodes(all | running | stopped) -> [{site(), node()}].
+nodes(Type) ->
+  maybe
+    {ok, Cluster} ?= classy_node:the_cluster(),
+    {ok, Local} ?= classy_node:the_site(),
+    NodeOfSite = classy_membership:node_of_site(Cluster, Local),
+    Nodes = [node() | nodes()],
+    lists:foldl(
+      fun(Site, Acc) ->
+          case NodeOfSite of
+            #{Site := Node} ->
+              Valid = case Type of
+                        all -> true;
+                        running -> lists:member(Node, Nodes);
+                        stopped -> not lists:member(Node, Nodes)
+                      end,
+              if Valid -> [Node | Acc];
+                 true   -> Acc
+              end;
+            #{} ->
+              Acc
+          end
+      end,
+      [],
+      sites())
   else
     _ ->
       []
