@@ -7,7 +7,6 @@
 
 %% API:
 -export([ start_link/0
-        , nodes_of_cluster/1
         , maybe_init_the_site/2
         , join_node/2
         , kick_site/2
@@ -49,6 +48,9 @@
 
 -record(node_info, {node, cluster, isup, site}).
 
+-type run_level_int() :: 0..3.
+-type run_level_atom() :: ?stopped | ?single | ?cluster | ?quorum.
+
 %%================================================================================
 %% API functions
 %%================================================================================
@@ -61,11 +63,6 @@ maybe_init_the_site(MaybeCluster, MaybeSite) ->
 -spec start_link() -> {ok, pid()}.
 start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
-
--spec nodes_of_cluster(classy:cluster_id()) -> #{classy:site() => node()}.
-nodes_of_cluster(_Cluster) ->
-  #{
-   }.
 
 -spec the_cluster() -> {ok, classy:cluster_id()} | undefined.
 the_cluster() ->
@@ -102,7 +99,7 @@ kick_site(Site, Intent) ->
 -record(s,
         { cluster :: classy:cluster_id() | undefined
         , site :: classy:site()
-        , run_level = stopped :: classy:run_level()
+        , run_level = 0 :: run_level_int()
         }).
 
 init(_) ->
@@ -148,17 +145,35 @@ handle_call(#call_kick{site = Target, intent = Intent}, _From, S) ->
       _ -> {error, local_not_in_cluster}
     end,
   {reply, Ret, S};
-handle_call(_Call, _From, S) ->
+handle_call(Call, From, S) ->
+  ?tp(warning, classy_unknown_event,
+      #{ kind => call
+       , from => From
+       , content => Call
+       , server => ?MODULE
+       }),
   {reply, {error, unknown_call}, S}.
 
 handle_cast(#cast_membership_change{} = Cast, S) ->
   {noreply, handle_membership_change_event(Cast, S)};
-handle_cast(_Cast, S) ->
+handle_cast(Cast, S) ->
+  ?tp(warning, classy_unknown_event,
+      #{ kind => cast
+       , content => Cast
+       , server => ?MODULE
+       }),
   {noreply, S}.
 
+handle_info({NodeUpOrDown, _Node, _}, S) when NodeUpOrDown =:= nodeup; NodeUpOrDown =:= nodedown ->
+  {noreply, adjust_run_level(S)};
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
-handle_info(_Info, S) ->
+handle_info(Info, S) ->
+  ?tp(warning, classy_unknown_event,
+      #{ kind => info
+       , content => Info
+       , server => ?MODULE
+       }),
   {noreply, S}.
 
 terminate(_Reason, S) ->
@@ -235,7 +250,7 @@ handle_kick(Cluster, Local, Target, Intent) ->
   end.
 
 handle_join(Node, S, Intent) ->
-  case rpc:call(Node, ?MODULE, hello, [], rpc_timeout()) of
+  case rpc:call(Node, ?MODULE, hello, [], classy_lib:rpc_timeout()) of
     #{ site := Remote
      , cluster := Cluster
      , pid := _RemotePid
@@ -292,13 +307,13 @@ leave_cluster(Cluster, Local, S, Intent) ->
   end.
 
 on_leave(S0 = #s{cluster = Cluster, site = Local}, Intent) ->
-  S = change_run_level(?stopped, S0),
+  S = change_run_level(run_level(?stopped), S0),
   classy_table:delete(?ptab, ?the_cluster),
   classy_hook:foreach(?on_post_kick, [Cluster, Local, Intent]),
   S#s{ cluster = undefined
      }.
 
-join_cluster(Cluster, Local, S = #s{run_level = ?stopped}) ->
+join_cluster(Cluster, Local, S = #s{run_level = 0}) ->
   {ok, _} = classy_sup:ensure_membership(Cluster, Local),
   classy_hook:foreach(?on_post_join, [Cluster, Local]),
   set_val(?the_cluster, Cluster),
@@ -320,41 +335,43 @@ ensure_value(Key, OnCreateHook, Default) ->
       set_val(Key, Val)
   end.
 
-rpc_timeout() ->
-  application:get_env(classy, rpc_timeout, 5_000).
 
 set_val(Key, Val) when is_binary(Val), Key =/= ?the_site orelse Key =/= ?the_cluster ->
   classy_table:write(?ptab, Key, Val).
 
 -spec adjust_run_level(#s{}) -> #s{}.
 adjust_run_level(S = #s{cluster = Cluster, site = Site}) ->
-  NSites = length(classy_membership:members(Cluster, Site)),
-  MinClusterSize = application:get_env(classy, n_sites, 1),
-  RunLevel = if NSites >= MinClusterSize ->
-                 ?cluster;
-                true ->
-                 ?single
+  NKnown = length(classy_membership:members(Cluster, Site)),
+  NRunning = length(classy:nodes(running)),
+  RunLevel = case NKnown >= classy_lib:n_sites() of
+               true  ->
+                 case NRunning >= classy:quorum(config) of
+                   true  -> run_level(?quorum);
+                   false -> run_level(?cluster)
+                 end;
+               false -> run_level(?single)
              end,
   change_run_level(RunLevel, S).
 
--spec change_run_level(classy:run_level(), #s{}) -> #s{}.
-change_run_level(RL, #s{run_level = RL} = S) ->
+-spec change_run_level(run_level_int(), #s{}) -> #s{}.
+change_run_level(Level, #s{run_level = Level} = S) when is_integer(Level) ->
   S;
-%% UP:
-change_run_level(?single, #s{run_level = ?stopped} = S) ->
-  classy_hook:foreach(?on_change_run_level, [?stopped, ?single]),
-  S#s{run_level = ?single};
-change_run_level(?cluster, #s{run_level = ?single} = S) ->
-  classy_hook:foreach(?on_change_run_level, [?single, ?cluster]),
-  S#s{run_level = ?cluster};
-change_run_level(?cluster, #s{run_level = ?stopped} = S) ->
-  change_run_level(?cluster, change_run_level(?single, S));
-%% DOWN:
-change_run_level(?single, #s{run_level = ?cluster} = S) ->
-  classy_hook:foreach(?on_change_run_level, [?cluster, ?single]),
-  S#s{run_level = ?single};
-change_run_level(?stopped, #s{run_level = ?single} = S) ->
-  classy_hook:foreach(?on_change_run_level, [?single, ?stopped]),
-  S#s{run_level = ?stopped};
-change_run_level(?stopped, #s{run_level = ?cluster} = S) ->
-  change_run_level(?stopped, change_run_level(?single, S)).
+change_run_level(To, #s{run_level = From} = S) when To >= 0, To =< 3 ->
+  Next = if To > From ->
+             From + 1;
+            To < From ->
+             From - 1
+         end,
+  classy_hook:foreach(?on_change_run_level, [run_level(From), run_level(Next)]),
+  change_run_level(To, S#s{run_level = Next}).
+
+-spec run_level(run_level_int()) -> run_level_atom();
+               (run_level_atom()) -> run_level_int().
+run_level(?stopped) -> 0;
+run_level(?single)  -> 1;
+run_level(?cluster) -> 2;
+run_level(?quorum)  -> 3;
+run_level(0) -> ?stopped;
+run_level(1) -> ?single;
+run_level(2) -> ?cluster;
+run_level(3) -> ?quorum.

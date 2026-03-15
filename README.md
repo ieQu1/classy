@@ -1,7 +1,18 @@
 classy
 =====
 
-An application that helps managing a cluster of Erlang nodes
+An application that helps managing a cluster of Erlang nodes.
+
+# Concepts
+
+- Site ID: a random unique identifier of the node that persists between the restarts and host name changes.
+- Cluster ID: a random unique identifier of the cluster.
+- Run stage: global system state derived from the configuration and the number of peers.
+  There are the following run stages:
+  + `stopped`: classy is stopped
+  + `single`: classy application is running and exchanging membership information
+  + `cluster`: number of known peers is >= `n_sites` configuration parameter.
+  + `quorum`: number of running peers is >= `quorum` configuration parameter.
 
 # Configuration
 
@@ -10,35 +21,45 @@ An application that helps managing a cluster of Erlang nodes
 ## `classy.setup_hooks`
 
 Type: `mfa()`.
+
 A callback that is classy executes during startup.
 It allows business application to set up other hooks using a more type-safe API.
-
 
 ## `classy.table_dir`
 
 Type: `file:filename()`.
+
 Default: `"."`
+
 Directory where persistent data is stored.
 It should be writable.
 
 ## `classy.sync_timeout`
 
 Type: `non_neg_integer()`.
+
 Unit: ms.
-Maximum interval of time that can pass between the cluster CRDT server receiving an update and the moment it propagates it to the peers.
+
+Maximum interval of time that can pass between the membership CRDT server receiving an update and the moment it propagates it to the peers.
 
 ## `classy.rpc_timeout`
 
 Type: `timeout()`.
+
 Unit: ms.
+
 Default: 5s.
+
 Default timeout for remote procedure calls.
 
 ## `classy.forget_after`
 
 Type: `pos_integer()`
+
 Unit: s.
+
 Default: 1w.
+
 Forget information about inactive (kicked) sites after this period of time.
 
 Note: cleanup procedure may lead to the following situation:
@@ -56,8 +77,18 @@ So `forget_timeout` should be set to a fairly large value to make sure it doesn'
 ## `classy.n_sites`
 
 Type: `pos_integer()`,
+
 Default: 1.
-Advance `run_stage` to `cluster` when the cluster contains at least this many sites.
+
+Minimum number of running members necessary to advance `run_stage` from `single` to `cluster`.
+
+## `classy.quorum`
+
+Type: `pos_integer()`,
+
+Default: 1.
+
+Minimum number of running members necessary to advance `run_stage` from `cluster` to `quorum`.
 
 # Setting default site and cluster
 

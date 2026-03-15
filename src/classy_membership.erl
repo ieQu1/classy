@@ -107,7 +107,7 @@
           cluster :: classy:cluster_id()
           %% Local site id:
         , site :: classy:site()
-        , sync_timer :: undefined | reference()
+        , sync_timer :: classy_lib:wakeup_timer()
           %% Logical clock:
         , clock :: clock()
         }).
@@ -268,14 +268,25 @@ handle_call(#call_cleanup{forget_after = FA}, _From, S) ->
 handle_call(#call_sync{}, _From, S0) ->
   S = handle_sync(S0),
   {reply, ok, S};
-handle_call(_Call, _From, S) ->
+handle_call(Call, From, S) ->
+  ?tp(warning, classy_unknown_event,
+      #{ kind => call
+       , from => From
+       , content => Call
+       , server => ?MODULE
+       }),
   {reply, {error, unknown_call}, S}.
 
 handle_cast(#cast_sync{} = Req, S0) ->
   S = handle_sync_in(Req, S0),
   run_hooks(S),
   {noreply, S};
-handle_cast(_Cast, S) ->
+handle_cast(Cast, S) ->
+  ?tp(warning, classy_unknown_event,
+      #{ kind => cast
+       , content => Cast
+       , server => ?MODULE
+       }),
   {noreply, S}.
 
 handle_info({'EXIT', _, shutdown}, S) ->
@@ -283,7 +294,12 @@ handle_info({'EXIT', _, shutdown}, S) ->
 handle_info(#to_sync_out{}, S0) ->
   S = handle_sync(S0#s{sync_timer = undefined}),
   {noreply, need_sync(S)};
-handle_info(_Info, S) ->
+handle_info(Info, S) ->
+  ?tp(warning, classy_unknown_event,
+      #{ kind => info
+       , content => Info
+       , server => ?MODULE
+       }),
   {noreply, S}.
 
 terminate(_Reason, #s{}) ->
@@ -337,7 +353,7 @@ local_command(C, #call_set{target = Target, k = K, v = V}, S = #s{site = Local})
               , c = C
               , k = K
               , val = V
-              , owt = time_s()
+              , owt = classy_lib:time_s()
               },
   _ = merge(C, Op, S),
   need_sync(S).
@@ -454,7 +470,7 @@ handle_cleanup(ForgetAfter, S) ->
 %% 3. Other active peers have received all data about the peer
 -spec sites_for_cleanup(integer(), #s{}) -> [classy:site()].
 sites_for_cleanup(SecsDown, S) ->
-  MinTimeWhenKicked = time_s() - SecsDown,
+  MinTimeWhenKicked = classy_lib:time_s() - SecsDown,
   MinUnacked = min_unacked(MinTimeWhenKicked, S),
   SitesWithoutRecentUpdates = peers(S) -- recently_updated(MinUnacked, S),
   lists:filter(
@@ -599,11 +615,9 @@ need_sync(S) ->
 %% Schedule sync with the peers after a specified timeout.
 %% This call has no effect if the sync is already scheduled.
 -spec need_sync(non_neg_integer(), #s{}) -> #s{}.
-need_sync(_Timeout, S = #s{sync_timer = R}) when is_reference(R) ->
-  S;
-need_sync(Timeout, S = #s{sync_timer = undefined}) ->
-  TRef = erlang:send_after(Timeout, self(), #to_sync_out{}),
-  S#s{sync_timer = TRef}.
+need_sync(After, S = #s{sync_timer = T0}) ->
+  T = classy_lib:wakeup_after(#to_sync_out{}, After, T0),
+  S#s{sync_timer = T}.
 
 -spec get_acked_in(classy:site(), #s{}) -> clock().
 get_acked_in(Site, #s{cluster = C, site = Local}) ->
@@ -641,20 +655,10 @@ set_acked_out(Site, Clock, #s{cluster = Cluster, site = Local}) ->
     #pk_acked_out{c = Cluster, l = Local, r = Site},
     Clock).
 
-sync_targets(S = #s{cluster = Cluster, site = Local}) ->
+sync_targets(S = #s{site = Local}) ->
   maps:remove(
     Local,
-    maps:merge(
-      nodes_of_cluster(S),
-      classy_node:nodes_of_cluster(Cluster)
-     )).
-
--ifndef(CONCUERROR).
-
-time_s() ->
-  os:system_time(second).
-
--endif.
+    nodes_of_cluster(S)).
 
 %%--------------------------------------------------------------------------------
 %% Unit tests

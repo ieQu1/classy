@@ -110,7 +110,7 @@ smoke_snapshot_test() ->
 setup(TC) ->
   Dir = dir(TC),
   application:set_env(classy, table_dir, Dir),
-  application:set_env(classy, table_batch_size, 10),
+  application:set_env(classy, table_batch_size, 2),
   ok = filelib:ensure_path(Dir),
   {ok, Apps} = application:ensure_all_started(classy),
   #cleanup{ dir = Dir

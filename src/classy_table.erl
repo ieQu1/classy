@@ -3,7 +3,7 @@
 %%--------------------------------------------------------------------
 
 %% @doc
-%% This module implements a standalone minimalist analogue of mnesia's `local_data` table with `disc_copies` storage.
+%% This module implements a standalone minimalist analogue of mnesia's `local_data' table with `disc_copies' storage.
 %%
 %% It is used to persistently save classy's own data.
 %% Other applications can also use it for data that doesn't require replication and is not written too frequently.
@@ -173,7 +173,7 @@ start_link(Tab, Options) ->
 init([TabName, Options]) ->
   process_flag(trap_exit, true),
   ETSOpts = maps:get(ets_options, Options, [set]),
-  BadnessThreshold = maps:get(badness_threshold, Options, 1000),
+  BadnessThreshold = maps:get(badness_threshold, Options, 100),
   S = #s{ name = TabName
         , ets = ets:new(TabName, [named_table, protected, {keypos, #classy_kv.k} | ETSOpts])
         , dirty = #{}
@@ -203,15 +203,31 @@ handle_call(#call_force_compaction{}, From, S0) ->
   end;
 handle_call(#call_drop{}, From, S) ->
   {stop, normal, handle_drop(From, S)};
-handle_call(_Call, _From, S) ->
+handle_call(Call, From, S) ->
+  ?tp(warning, classy_unknown_event,
+      #{ kind => call
+       , from => From
+       , content => Call
+       , server => ?MODULE
+       }),
   {reply, {error, unknown_call}, S}.
 
-handle_cast(_Cast, S) ->
+handle_cast(Cast, S) ->
+  ?tp(warning, classy_unknown_event,
+      #{ kind => cast
+       , content => Cast
+       , server => ?MODULE
+       }),
   {noreply, S}.
 
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
-handle_info(_Info, S) ->
+handle_info(Info, S) ->
+  ?tp(warning, classy_unknown_event,
+      #{ kind => info
+       , content => Info
+       , server => ?MODULE
+       }),
   {noreply, S}.
 
 terminate(_, undefined) ->
@@ -385,7 +401,7 @@ log_badness(#s{ets = ETS, log_size = LogSize}) ->
   max(0, LogSize - NItems).
 
 batch_size() ->
-  application:get_env(classy, table_batch_size, 1000).
+  application:get_env(classy, table_batch_size, 100).
 
 -ifndef(CONCUERROR).
 rename_log(From, To) ->
@@ -395,7 +411,7 @@ is_log(Filename) ->
   filelib:is_file(Filename).
 
 open_log(Filename, Mode) ->
-  Opts = [ {name, Filename}
+  Opts = [ {name, make_ref()}
          , {file, Filename}
          , {mode, Mode}
          , {format, internal}
@@ -403,6 +419,7 @@ open_log(Filename, Mode) ->
          , {size, infinity}
          , {repair, true}
          , {notify, false}
+         , {linkto, self()}
          ],
   case disk_log:open(Opts) of
     {ok, Log} ->

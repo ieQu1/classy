@@ -33,5 +33,6 @@
 -define(stopped, stopped).
 -define(single, single).
 -define(cluster, cluster).
+-define(quorum, quorum).
 
 -endif.

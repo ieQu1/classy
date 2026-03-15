@@ -6,12 +6,14 @@
 %% API:
 -export([ init/0
         , insert/3
+        , unhook/1
         , foreach/2
         , all/2
         ]).
 
 -export_type([ hookpoint/0
              , prio/0
+             , hook/0
              ]).
 
 -include("classy_internal.hrl").
@@ -26,6 +28,8 @@
 -type hookpoint() :: atom().
 
 -type prio() :: integer().
+
+-opaque hook() :: tuple().
 
 %%================================================================================
 %% API functions
@@ -106,9 +110,15 @@ init() ->
       ok
   end.
 
--spec insert(hookpoint(), fun(), prio()) -> ok.
+-spec insert(hookpoint(), fun(), prio()) -> hook().
 insert(Hookpoint, Hook, Prio) when is_atom(Hookpoint), is_integer(Prio), is_function(Hook) ->
-  ets:insert(?tab, {{Hookpoint, -Prio, Hook}}),
+  Key = {Hookpoint, -Prio, Hook},
+  ets:insert(?tab, {Key}),
+  Key.
+
+-spec unhook(hook()) -> ok.
+unhook(Key) ->
+  ets:delete(?tab, Key),
   ok.
 
 -spec foreach(hookpoint(), list()) -> ok.
