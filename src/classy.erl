@@ -32,6 +32,7 @@
              ]).
 
 -include("classy_internal.hrl").
+-compile({no_auto_import, [nodes/1]}).
 
 %%================================================================================
 %% Type declarations
@@ -96,30 +97,26 @@ sites() ->
   end.
 
 -spec nodes(all | running | stopped) -> [{site(), node()}].
-nodes(Type) ->
+nodes(running) ->
   maybe
     {ok, Cluster} ?= classy_node:the_cluster(),
     {ok, Local} ?= classy_node:the_site(),
-    NodeOfSite = classy_membership:node_of_site(Cluster, Local),
-    Nodes = [node() | nodes()],
-    lists:foldl(
-      fun(Site, Acc) ->
-          case NodeOfSite of
-            #{Site := Node} ->
-              Valid = case Type of
-                        all -> true;
-                        running -> lists:member(Node, Nodes);
-                        stopped -> not lists:member(Node, Nodes)
-                      end,
-              if Valid -> [Node | Acc];
-                 true   -> Acc
-              end;
-            #{} ->
-              Acc
-          end
-      end,
-      [],
-      sites())
+    Sites = classy_membership:site_of_node(Cluster, Local),
+    [I || I <- [node() | erlang:nodes()],
+          case Sites of
+            #{I := _} -> true;
+            _ -> false
+          end]
+  else _ ->
+      []
+  end;
+nodes(stopped) ->
+  nodes(all) -- nodes(running);
+nodes(all) ->
+  maybe
+    {ok, Cluster} ?= classy_node:the_cluster(),
+    {ok, Local} ?= classy_node:the_site(),
+    maps:keys(classy_membership:site_of_node(Cluster, Local))
   else
     _ ->
       []

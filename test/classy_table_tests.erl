@@ -88,7 +88,7 @@ smoke_snapshot_test() ->
     ?assertEqual(ok, classy_table:open(t, #{})),
     [?assertEqual(ok, classy_table:dirty_write(t, N, N)) || N <- lists:seq(1, 100)],
     %% Checkpoint and reopen table:
-    ?assertEqual(ok, classy_table:checkpoint(t)),
+    ?assertEqual(ok, classy_table:force_compaction(t)),
     ?assertEqual(ok, classy_table:stop(t, infinity)),
     ?assertEqual(ok, classy_table:open(t, #{})),
     %% Verify data:

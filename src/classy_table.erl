@@ -22,7 +22,7 @@
         , delete/2
         , dirty_delete/2
         , flush/1
-        , checkpoint/1
+        , force_compaction/1
         , lookup/2
         ]).
 
@@ -52,7 +52,10 @@
 
 -type tab() :: atom().
 
--type options() :: #{}.
+-type options() ::
+        #{ ets_options => list()
+         , badness_threshold => pos_integer()
+         }.
 
 -type rec() :: #classy_kv{ k :: term()
                          , v :: term()
@@ -62,7 +65,7 @@
 -record(call_write, {k, v, wal = true :: boolean()}).
 -record(call_delete, {k, wal = true :: boolean()}).
 -record(call_flush, {}).
--record(call_checkpoint, {}).
+-record(call_force_compaction, {}).
 -record(call_drop, {}).
 
 -define(w(K, V), {w, K, V}).
@@ -130,9 +133,9 @@ flush(Tab) ->
   gen_server:call(?via(Tab), #call_flush{}, infinity).
 
 %% @doc Make a checkpoint and trunkate the WAL.
--spec checkpoint(tab()) -> ok.
-checkpoint(Tab) ->
-  gen_server:call(?via(Tab), #call_checkpoint{}, infinity).
+-spec force_compaction(tab()) -> ok.
+force_compaction(Tab) ->
+  gen_server:call(?via(Tab), #call_force_compaction{}, infinity).
 
 %% @doc Drop the table (it must be open)
 -spec drop(tab()) -> ok.
@@ -161,6 +164,8 @@ start_link(Tab, Options) ->
         , dir :: file:filename()
         , dirty :: #{_ => true}
         , log :: _
+        , log_size = 0 :: non_neg_integer()
+        , badness_threshold :: pos_integer()
         }).
 
 -type s() :: #s{}.
@@ -168,17 +173,17 @@ start_link(Tab, Options) ->
 init([TabName, Options]) ->
   process_flag(trap_exit, true),
   ETSOpts = maps:get(ets_options, Options, [set]),
+  BadnessThreshold = maps:get(badness_threshold, Options, 1000),
   S = #s{ name = TabName
         , ets = ets:new(TabName, [named_table, protected, {keypos, #classy_kv.k} | ETSOpts])
         , dirty = #{}
         , dir = application:get_env(classy, table_dir, ".")
+        , badness_threshold = BadnessThreshold
         },
   {ok, S, {continue, restore}}.
 
 handle_continue(restore, S) ->
-  {noreply, restore(S)};
-handle_continue({checkpoint2, From}, S) ->
-  {noreply, handle_checkpoint2(From, S)}.
+  {noreply, restore(S)}.
 
 handle_call(#call_ensure_open{}, _From, S) ->
   {reply, ok, S};
@@ -186,10 +191,16 @@ handle_call(#call_write{} = C, _From, S) ->
   {reply, ok, handle_write(C, S)};
 handle_call(#call_delete{} = C, _From, S) ->
   {reply, ok, handle_delete(C, S)};
-handle_call(#call_flush{}, _From, S) ->
-  {reply, ok, handle_flush(S)};
-handle_call(#call_checkpoint{}, From, S) ->
-  handle_checkpoint(From, S);
+handle_call(#call_flush{}, From, S) ->
+  maybe_compact(From, ok, handle_flush(S));
+handle_call(#call_force_compaction{}, From, S0) ->
+  case do_compaction(S0) of
+    {ok, S} ->
+      {reply, ok, S};
+    {error, Reason, S} ->
+      gen_server:reply(From, {error, Reason}),
+      {stop, compaction_failed, S}
+  end;
 handle_call(#call_drop{}, From, S) ->
   {stop, normal, handle_drop(From, S)};
 handle_call(_Call, _From, S) ->
@@ -225,14 +236,23 @@ restore(S = #s{ets = ETS}) ->
     {true, false} ->
       %% Normal case:
       {ok, Log} = open_log(RegularName, read_write),
-      do_restore(Log, start, ETS),
-      S#s{log = Log};
-    _ ->
-      %% TODO: handle aborted checkpoint
-      error(todo)
+      {ok, LogSize} = do_restore(Log, start, ETS, 0),
+      S#s{ log = Log
+         , log_size = LogSize
+         };
+    {true, true} ->
+      %% Server was stopped while compaction was ongling:
+      logger:warning(#{ msg => classy_table_aborted_compaction
+                      , log_name => NewName
+                      }),
+      ok = rename_log(NewName, NewName ++ ".bup"),
+      restore(S);
+    {false, true} ->
+      %% Should not happen:
+      exit({classy_unrecoverable_aborted_table_compaction, NewName})
   end.
 
-do_restore(Log, Cont0, ETS) ->
+do_restore(Log, Cont0, ETS, N) ->
   case read_log_chunk(Log, Cont0, batch_size()) of
     {ok, Cont, Chunk} ->
       lists:foreach(
@@ -242,9 +262,9 @@ do_restore(Log, Cont0, ETS) ->
             ets:delete(ETS, K)
         end,
         Chunk),
-      do_restore(Log, Cont, ETS);
+      do_restore(Log, Cont, ETS, N + length(Chunk));
     eof ->
-      ok
+      {ok, N}
   end.
 
 -spec log_name(s(), string()) -> file:filename().
@@ -252,18 +272,26 @@ log_name(#s{name = Name, dir = Dir}, Suffix) ->
   FN = atom_to_list(Name) ++ Suffix,
   filename:join(Dir, FN).
 
-handle_write(#call_write{k = K, v = V, wal = true}, S = #s{ets = ETS, log = Log, dirty = D}) ->
+handle_write(
+  #call_write{k = K, v = V, wal = true},
+  #s{ets = ETS, log = Log, dirty = D, log_size = LogSize} = S
+ ) ->
   ok = write_log(Log, [?w(K, V)]),
   ets:insert(ETS, #classy_kv{k = K, v = V}),
-  S#s{dirty = maps:remove(K, D)};
+  S#s{dirty = maps:remove(K, D), log_size = LogSize + 1};
 handle_write(#call_write{k = K, v = V, wal = false}, S = #s{ets = ETS, dirty = D}) ->
   ets:insert(ETS, #classy_kv{k = K, v = V}),
   S#s{dirty = D#{K => true}}.
 
-handle_delete(#call_delete{k = K, wal = true}, S = #s{ets = ETS, log = Log, dirty = D}) ->
+handle_delete(
+  #call_delete{k = K, wal = true},
+  #s{ets = ETS, log = Log, dirty = D, log_size = LogSize} = S
+ ) ->
   ok = write_log(Log, [?d(K)]),
   ets:delete(ETS, K),
-  S#s{dirty = maps:remove(K, D)};
+  S#s{ dirty = maps:remove(K, D)
+     , log_size = LogSize + 1
+     };
 handle_delete(#call_delete{k = K, wal = false}, S = #s{ets = ETS, dirty = D}) ->
   ets:delete(ETS, K),
   S#s{dirty = D#{K => true}}.
@@ -271,48 +299,64 @@ handle_delete(#call_delete{k = K, wal = false}, S = #s{ets = ETS, dirty = D}) ->
 handle_flush(S = #s{log = Log, dirty = Dirty}) when Log =:= undefined;
                                                     map_size(Dirty) =:= 0 ->
   S;
-handle_flush(S = #s{ets = ETS, log = Log, dirty = Dirty}) ->
-  Ops = maps:fold(
-          fun(K, _, Acc) ->
-              case ets:lookup(ETS, K) of
-                [#classy_kv{v = V}] ->
-                  [?w(K, V) | Acc];
-                [] ->
-                  [?d(K) | Acc]
-              end
-          end,
-          [],
-          Dirty),
+handle_flush(S = #s{ets = ETS, log = Log, dirty = Dirty, log_size = LogSize0}) ->
+  {LogSize, Ops} =
+    maps:fold(
+      fun(K, _, {AccNW, AccOps}) ->
+          Op = case ets:lookup(ETS, K) of
+                 [#classy_kv{v = V}] -> ?w(K, V);
+                 []                  -> ?d(K)
+               end,
+          { AccNW + 1
+          , [Op | AccOps]
+          }
+      end,
+      {LogSize0, []},
+      Dirty),
   ok = write_log(Log, Ops),
-  S#s{dirty = #{}}.
+  S#s{ dirty = #{}
+     , log_size = LogSize
+     }.
 
-handle_checkpoint(From, S0 = #s{}) ->
+-spec do_compaction(s()) -> {ok, s()} | {error, _Reason, s()}.
+do_compaction(S0 = #s{name = Name, ets = Ets}) ->
   S1 = #s{log = Old} = handle_flush(S0),
   ok = close_log(Old),
   S = S1#s{log = undefined},
-  {noreply, S, {continue, {checkpoint2, From}}}.
-
-handle_checkpoint2(From, S = #s{ets = Ets}) ->
-  NewName = log_name(S, ".NEW"),
-  OldName = log_name(S, ""),
-  {ok, Log} = open_log(NewName, read_write),
-  ok = do_checkpoint(
+  try
+     NewName = log_name(S, ".NEW"),
+     OldName = log_name(S, ""),
+     {ok, Log} = open_log(NewName, read_write),
+     LogSize =
+       dump_ets(
          Log,
+         0,
          ets:match(Ets, '$1', batch_size())),
-  ok = rename_log(NewName, OldName),
-  gen_server:reply(From, ok),
-  S#s{log = Log, dirty = #{}}.
+     ok = rename_log(NewName, OldName),
+     {ok, S#s{log = Log, dirty = #{}, log_size = LogSize}}
+  catch
+    EC:Err:Stack ->
+      logger:error(#{ msg => failed_to_compact_classy_log
+                    , EC => Err
+                    , stack => Stack
+                    , table => Name
+                    }),
+      {error, Err, S}
+  end.
 
-do_checkpoint(_Log, '$end_of_table') ->
-  ok;
-do_checkpoint(Log, {Batch, Cont}) ->
+dump_ets(_Log, N, '$end_of_table') ->
+  N;
+dump_ets(Log, N, {Batch, Cont}) ->
   Recs = lists:map(
            fun([#classy_kv{k = K, v = V}]) ->
                ?w(K, V)
            end,
            Batch),
   ok = write_log(Log, Recs),
-  do_checkpoint(Log, ets:match(Cont)).
+  dump_ets(
+    Log,
+    N + length(Recs),
+    ets:match(Cont)).
 
 handle_drop(From, S = #s{ets = Ets, log = Log}) ->
   ets:delete(Ets),
@@ -321,6 +365,24 @@ handle_drop(From, S = #s{ets = Ets, log = Log}) ->
   file:delete(log_name(S, ".NEW")),
   gen_server:reply(From, ok),
   undefined.
+
+maybe_compact(From, Reply, S0 = #s{badness_threshold = Threshold}) ->
+  case log_badness(S0) >= Threshold of
+    true ->
+      case do_compaction(S0) of
+        {ok, S} ->
+          {reply, Reply, S};
+        {error, Reason, S} ->
+          gen_server:reply(From, {error, Reason}),
+          {stop, Reason, S}
+      end;
+    false ->
+      {reply, Reply, S0}
+  end.
+
+log_badness(#s{ets = ETS, log_size = LogSize}) ->
+  NItems = ets:info(ETS, size),
+  max(0, LogSize - NItems).
 
 batch_size() ->
   application:get_env(classy, table_batch_size, 1000).
@@ -338,6 +400,7 @@ open_log(Filename, Mode) ->
          , {mode, Mode}
          , {format, internal}
          , {type, halt}
+         , {size, infinity}
          , {repair, true}
          , {notify, false}
          ],
