@@ -91,7 +91,8 @@ sites() ->
   maybe
     {ok, Cluster} ?= classy_node:the_cluster(),
     {ok, Local} ?= classy_node:the_site(),
-    classy_membership:members(Cluster, Local)
+    ?tp_span(classy_get_members, #{},
+    classy_membership:members(Cluster, Local))
   else
     _ ->
       []

@@ -176,7 +176,7 @@ handle_info(Info, S) ->
        }),
   {noreply, S}.
 
-terminate(_Reason, S) ->
+terminate(_Reason, _S) ->
   ok.
 
 %%================================================================================
@@ -217,7 +217,7 @@ handle_membership_change_event(
                          },
   S = #s{cluster = ThisCluster, site = ThisSite}
  ) ->
-  ?tp(warning, membership_change,
+  ?tp(debug, membership_change,
       #{ cluster => Cluster
        , origin => Local
        , target => Remote

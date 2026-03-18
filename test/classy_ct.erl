@@ -22,14 +22,25 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
+-define(peer_tab, classy_ct_peer_registery).
+
 %% @doc Get all the test cases in a CT suite.
 all(Suite) ->
   lists:usort([F || {F, 1} <- Suite:module_info(exports),
                     string:substr(atom_to_list(F), 1, 2) == "t_"
               ]).
 
+create_table() ->
+  ets:new(?peer_tab, [public, set, named_table, {heir, group_leader(), ?MODULE}]).
+
 cleanup(Testcase) ->
-  ct:pal("Cleaning up after ~p...", [Testcase]).
+  ct:pal("Cleaning up after ~p...", [Testcase]),
+  lists:foreach(
+    fun({Node, Pid}) ->
+        peer:stop(Pid),
+        ets:delete(?peer_tab, Node)
+    end,
+    ets:tab2list(?peer_tab)).
 
 -type env() :: [{atom(), atom(), term()}].
 
@@ -73,20 +84,21 @@ start_peer(
    , workdir := WorkDir
    } = Spec
  ) ->
-  filelib:ensure_path(WorkDir),
-  CommonBeamOpts = "+S 1:1 " % We want VMs to only occupy a single core
-    "-kernel inet_dist_listen_min 3000 " % Avoid collisions with gen_rpc ports
-    "-kernel inet_dist_listen_max 3050 "
-    "-proto_dist inet_tcp_proxy ",
-  {ok, Pid, Node} = ?CT_PEER(#{ name => Name
-                              , longnames => true
-                              , peer_down => stop
-                              , host => "127.0.0.1"
-                              , args => string:split(CommonBeamOpts, " ")
-                              , shutdown => halt
-                              , wait_boot => 5_000
-                              }),
-  erlang:register(Node, Pid),
+  ok = filelib:ensure_path(WorkDir),
+  CommonBeamOpts = "+S 1:1 " % We want child VMs to only occupy a single core
+    "-kernel prevent_overlapping_partitions false ",
+    %%"-proto_dist inet_tcp_proxy ",
+  Args = #{ name      => Name
+          , longnames => true
+          , peer_down => stop
+          , host      => "127.0.0.1"
+          , args      => string:split(CommonBeamOpts, " ", all)
+          , shutdown  => halt
+          , wait_boot => 5_000
+          },
+  ct:pal("Starting peer ~p (~s)", [Args, WorkDir]),
+  {ok, Pid, Node} = ?CT_PEER(Args),
+  ets:insert(?peer_tab, {Node, Pid}),
   Ret = Spec#{node => Node, pid => Pid},
   Self = filename:dirname(code:which(?MODULE)),
   [erpc:call(Node, code, add_patha, [Path]) || Path <- [Self|CodePaths]],
@@ -97,7 +109,12 @@ start_peer(
   rpc(Ret, logger, update_formatter_config, [default, FormatterConfig]),
   LogLevel = list_to_atom(os:getenv("LOGLEVEL", "notice")),
   rpc(Ret, logger, update_primary_config, [#{level => LogLevel}]),
-  rpc(Ret, logger, update_handler_config, [default, #{level => LogLevel}]),
+  rpc(Ret, logger, update_handler_config,
+      [default, #{ level => LogLevel
+                 , config =>
+                     #{ file => filename:join("log", Name)
+                      }
+                 }]),
   {ok, _} = rpc(Ret, application, ensure_all_started, [inet_tcp_proxy_dist]),
   [{ok, _} = cover:start([Node]) || Cover],
   setenv(Ret, Env),
@@ -137,16 +154,20 @@ wait_running(Node, Timeout) ->
              wait_running(Node, Timeout - 100)
   end.
 
-stop_peer(Spec = #{name := Name}) ->
-  Node = list_to_atom(atom_to_list(Name) ++ "@127.0.0.1"),
-  case whereis(Node) of
-    Pid when is_pid(Pid) ->
+node_name(#{name := Name}) ->
+  list_to_atom(atom_to_list(Name) ++ "@127.0.0.1").
+
+stop_peer(Spec) ->
+  Node = node_name(Spec),
+  [begin
       rpc(Spec#{node => Node}, application, stop, [classy]),
       ok = cover:stop([Node]),
-      peer:stop(Pid);
-    undefined ->
-      ok
-  end.
+      peer:stop(Pid),
+      ets:delete(?peer_tab, Node)
+   end
+   || {_, Pid} <- ets:lookup(?peer_tab, Node),
+      is_process_alive(Pid)],
+  ok.
 
 remove_workdir(#{workdir := Dir}) ->
   file:del_dir_r(Dir).

@@ -294,10 +294,13 @@ handle_write(
  ) ->
   ok = write_log(Log, [?w(K, V)]),
   ets:insert(ETS, #classy_kv{k = K, v = V}),
-  S#s{dirty = maps:remove(K, D), log_size = LogSize + 1};
+  S#s{ dirty = maps:remove(K, D)
+     , log_size = LogSize + 1
+     };
 handle_write(#call_write{k = K, v = V, wal = false}, S = #s{ets = ETS, dirty = D}) ->
   ets:insert(ETS, #classy_kv{k = K, v = V}),
-  S#s{dirty = D#{K => true}}.
+  S#s{ dirty = D#{K => true}
+     }.
 
 handle_delete(
   #call_delete{k = K, wal = true},
@@ -412,7 +415,7 @@ is_log(Filename) ->
 
 open_log(Filename, Mode) ->
   Opts = [ {name, make_ref()}
-         , {file, Filename}
+         , {file, ensure_list(Filename)}
          , {mode, Mode}
          , {format, internal}
          , {type, halt}
@@ -452,3 +455,8 @@ read_log_chunk(Log, Cont, Size) ->
   end.
 
 -endif.
+
+ensure_list(L) when is_list(L) ->
+  L;
+ensure_list(Bin) when is_binary(Bin) ->
+  binary_to_list(Bin).

@@ -1,0 +1,104 @@
+%%--------------------------------------------------------------------
+%% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
+%%--------------------------------------------------------------------
+-module(classy_autoclean).
+
+-behavior(gen_server).
+
+%% API:
+-export([start_link/0]).
+
+%% behavior callbacks:
+-export([init/1, handle_call/3, handle_continue/2, handle_cast/2, handle_info/2, terminate/2]).
+
+%% internal exports:
+-export([get_last_alive_at/2]).
+
+-export_type([]).
+
+%%================================================================================
+%% Type declarations
+%%================================================================================
+
+%%================================================================================
+%% API functions
+%%================================================================================
+
+-define(SERVER, ?MODULE).
+-define(tab, classy_autoclean).
+
+-define(last_alive_at, laa).
+
+-type node_mon_entry() ::
+        #{ ?last_alive_at := classy_lib:unix_time_s()
+         }.
+
+-spec start_link() -> {ok, pid()}.
+start_link() ->
+  gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+%%================================================================================
+%% behavior callbacks
+%%================================================================================
+
+-record(s,
+        {
+        }).
+
+init(_) ->
+  process_flag(trap_exit, true),
+  S = #s{
+        },
+  {ok, S, {continue, real_init}}.
+
+handle_continue(real_init, S) ->
+  ok = classy_table:open(?tab, #{}),
+  %% [update_last_alive(Site) || Site <- sites()],
+  {noreply, S}.
+
+handle_call(_Call, _From, S) ->
+  {reply, {error, unknown_call}, S}.
+
+handle_cast(_Cast, S) ->
+  {noreply, S}.
+
+handle_info({'EXIT', _, shutdown}, S) ->
+  {stop, shutdown, S};
+handle_info(_Info, S) ->
+  {noreply, S}.
+
+terminate(_Reason, _S) ->
+  classy_table:stop(?tab, 4_000),
+  ok.
+
+%%================================================================================
+%% Internal exports
+%%================================================================================
+
+-spec get_last_alive_at(classy_lib:unix_time_s(), classy:site()) -> classy_lib:unix_time_s().
+get_last_alive_at(RemoteT, Site) ->
+  case classy_table:lookup(?tab, Site) of
+    [#{?last_alive_at := LAA}] ->
+      classy_lib:adjust_time_s_skew(RemoteT, LAA);
+    [] ->
+      %% We have never seen the site alive:
+      0
+  end.
+
+%%================================================================================
+%% Internal functions
+%%================================================================================
+
+-spec last_alive_at(classy:site()) -> {ok, classy_lib:unix_time_s()} | {error, no_quorum}.
+last_alive_at(Site) ->
+  Ret = erpc:multicall(
+          classy:nodes(running),
+          ?MODULE, get_last_alive_at, [Site],
+          classy_lib:rpc_timeout()),
+  Results = [I || {ok, I} <- Ret],
+  case length(Results) >= classy:quorum(running) of
+    true ->
+      {ok, lists:max(Results)};
+    false ->
+      {error, no_quorum}
+  end.

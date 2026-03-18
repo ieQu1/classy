@@ -8,6 +8,7 @@
 
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
+-include_lib("proper/include/proper.hrl").
 
 -define(ON(NODE, BODY), classy_ct:rpc(NODE, erlang, apply, [fun() -> BODY end, []])).
 
@@ -155,6 +156,7 @@ t_kick_in_absentia(Conf) ->
        N1_1 = classy_ct:start_peer(classy, C1),
        %% It should process the information about getting kicked:
        wait_site_kicked([N1_1], Cluster1, Site1),
+       ct:sleep(1000),
        %% It should not reappear in the sites list:
        [?assertSameSet(
            [Site2, Site3],
@@ -170,7 +172,14 @@ t_kick_in_absentia(Conf) ->
      after
        classy_ct:teardown_cluster(Cluster)
      end,
-     [
+     [ {"kicked_remotely_event",
+        fun(#{nodes := [N1 | _]}, Trace) ->
+            ?assertMatch(
+               [_],
+               [I || I = #{ ?snk_kind := classy_kicked_remotely
+                          , ?snk_meta := #{node := N1}
+                          } <- Trace])
+        end}
      ]).
 
 %% Verify that join and kick can be forbidden via hooks:
@@ -218,9 +227,61 @@ t_pre_checks(Conf) ->
      end,
      []).
 
+t_fuzz(_Config) ->
+  %% NOTE: we set timeout at the lowest level to capture the trace
+  %% and have a nicer error message.
+  %%
+  %% By default the number of tests and max_size are set to low
+  %% values to avoid blowing up CI. Hence it's recommended to
+  %% increase the max_size and numtests when doing local
+  %% development using "apps/emqx/test/sessds.cfg"
+  NTests = ct:get_config({fuzzer, n_tests}, 10),
+  MaxSize = ct:get_config({fuzzer, max_size}, 100),
+  NCommandsFactor = ct:get_config({fuzzer, command_multiplier}, 1),
+  ?run_prop(
+     #{ proper =>
+          #{ timeout => 3_000_000
+           , numtests => NTests
+           , max_size => MaxSize
+           , start_size => MaxSize
+           , max_shrinks => 0
+           }
+      },
+      ?forall_trace(
+         Cmds,
+         proper_statem:more_commands(
+           NCommandsFactor,
+           proper_statem:commands(
+             classy_fuzzer,
+             classy_fuzzer:initial_state(#{}))),
+         #{timetrap => 5_000 * length(Cmds) + 30_000},
+         try
+           %% Print information about the run:
+           ct:pal("*** Commands:~n~s~n", [classy_fuzzer:format_cmds(Cmds)]),
+           %% Initialize the system:
+           classy_fuzzer:cleanup(),
+           %% Run test:
+           {_History, State, Result} = proper_statem:run_commands(classy_fuzzer, Cmds),
+           ct:log(info, "*** Model state:~n  ~p~n", [State]),
+           ct:log("*** Result:~n  ~p~n", [Result]),
+           Result =:= ok orelse error({invalid_result, Result})
+         after
+           ok = classy_fuzzer:cleanup()
+         end,
+         [
+         ])),
+  snabbkaffe:stop().
+
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+init_per_suite(Cfg) ->
+  classy_ct:create_table(),
+  Cfg.
+
+end_per_suite(Cfg) ->
+  Cfg.
 
 all() ->
   classy_ct:all(?MODULE).

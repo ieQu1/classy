@@ -231,7 +231,9 @@ init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluste
     #{ cluster => Cluster
      , local => Site
      }),
-  ok = classy_table:open(?ptab, #{}),
+  ok = classy_table:open(
+         ?ptab,
+         #{ets_options => [{read_concurrency, true}]}),
   case classy_table:lookup(?ptab, #pk_clock{c = Cluster, s = Site}) of
     [Clock] -> ok;
     [] -> Clock = 0
