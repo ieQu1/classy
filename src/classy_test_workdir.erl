@@ -35,7 +35,7 @@
 
 init_per_cluster(#{testcase := TC}, State) ->
   {ok, CWD} = file:get_cwd(),
-  WD = filename:join([CWD, "classy_cluster", TC]),
+  WD = filename:join([CWD, ?MODULE, TC]),
   ok = filelib:ensure_path(WD),
   {ok, State#{workdir => WD}}.
 
@@ -43,7 +43,7 @@ cleanup_per_cluster(_Conf, Success, #{workdir := WD}) ->
   DoClean = case os:getenv("CLASSY_WORKDIR_CLEANUP") of
               "false" -> false;
               "true"  -> true;
-              _       -> not Success
+              _       -> Success
             end,
   case DoClean of
     true  -> file:del_dir_r(WD);

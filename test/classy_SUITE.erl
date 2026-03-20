@@ -52,19 +52,21 @@ t_cluster(_Conf) ->
 
 %% This testcase verifies happy case of joining one node to another:
 t_join(Conf) ->
-  Cluster = classy_ct:cluster([#{}, #{}], []),
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
   ?check_trace(
      #{timetrap => 10_000},
-     try
-       Nodes = [N1, N2] = classy_ct:start_cluster(classy, Cluster),
-       #{ site := Site1
+     begin
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       #{ site := S1
         , cluster := Cluster1
-        } = ?ON(N1, classy_node:hello()),
-       #{ site := Site2
+        } = ?ON(S1, classy_node:hello()),
+       #{ site := S2
         , cluster := Cluster2
-        } = ?ON(N2, classy_node:hello()),
-       RuntimeData = #{ nodes => Nodes
-                      , sites => [Site1, Site2]
+        } = ?ON(S2, classy_node:hello()),
+       RuntimeData = #{ nodes => [N1, N2]
+                      , sites => [S1, S2]
                       , clusters => [Cluster1, Cluster2]
                       },
        %% Verify status of the nodes in the singleton mode. Both
@@ -72,38 +74,36 @@ t_join(Conf) ->
        %% cluster ID should be equal to the site id:
        ?assertEqual(
           {ok, Cluster1},
-          ?ON(N1, classy_node:the_cluster())),
+          ?ON(S1, classy_node:the_cluster())),
        ?assertEqual(
-          [Site1],
-          ?ON(N1, classy:sites())),
+          [S1],
+          ?ON(S1, classy:sites())),
        ?assertEqual(
           {ok, Cluster2},
-          ?ON(N2, classy_node:the_cluster())),
+          ?ON(S2, classy_node:the_cluster())),
        ?assertEqual(
-          [Site2],
-          ?ON(N2, classy:sites())),
+          [S2],
+          ?ON(S2, classy:sites())),
        %% Join the nodes:
        ?tp(notice, test_join_n2, RuntimeData),
        ?assertMatch(
           ok,
-          ?ON(N2, classy:join_node(maps:get(node, N1), join))),
-       wait_site_joined(Nodes, Cluster1, Site2),
+          ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined([S1, S2], Cluster1, S2),
        %% Verify state after join:
        ?assertEqual(
           {ok, Cluster1},
-          ?ON(N1, classy_node:the_cluster())),
+          ?ON(S1, classy_node:the_cluster())),
        ?assertEqual(
           {ok, Cluster1},
-          ?ON(N2, classy_node:the_cluster())),
+          ?ON(S2, classy_node:the_cluster())),
        ?assertSameSet(
-          [Site1, Site2],
-          ?ON(N1, classy:sites())),
+          [S1, S2],
+          ?ON(S1, classy:sites())),
        ?assertSameSet(
-          [Site1, Site2],
-          ?ON(N2, classy:sites())),
+          [S1, S2],
+          ?ON(S2, classy:sites())),
        RuntimeData
-     after
-       classy_ct:teardown_cluster(Cluster)
      end,
      [ fun initialization_hooks/2
      , {"join hooks",
@@ -118,91 +118,93 @@ t_join(Conf) ->
 
 %% This testcase verifies happy case of kicking node from the cluster:
 t_kick(Conf) ->
-  Cluster = classy_ct:cluster([#{}, #{}, #{}], []),
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
   ?check_trace(
-     try
+     begin
        %% Prepare the system:
-       Nodes = [N1 = #{node := Node1}, N2, N3] = classy_ct:start_cluster(classy, Cluster),
-       #{ site := Site1
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       #{ site := S1
         , cluster := Cluster1
-        } = ?ON(N1, classy_node:hello()),
-       #{site := Site2} = ?ON(N2, classy_node:hello()),
-       #{site := Site3} = ?ON(N3, classy_node:hello()),
-       ?assertMatch(ok, ?ON(N2, classy:join_node(Node1, join))),
-       ?assertMatch(ok, ?ON(N3, classy:join_node(Node1, join))),
-       wait_site_joined(Nodes, Cluster1, Site2),
-       wait_site_joined(Nodes, Cluster1, Site3),
+        } = ?ON(S1, classy_node:hello()),
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertMatch(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster1, S2),
+       wait_site_joined(Sites, Cluster1, S3),
        %% Verify state:
        [?assertSameSet(
-           [Site1, Site2, Site3],
-           ?ON(Node, classy:sites()))
-        || Node <- Nodes],
+           Sites,
+           ?ON(I, classy:sites()))
+        || I <- Sites],
        %% Kick N1 from the cluster from N3:
-       ?assertMatch(ok, ?ON(N3, classy:kick_node(Node1, force))),
-       wait_site_kicked(Nodes, Cluster1, Site1),
+       ?assertMatch(ok, ?ON(S3, classy:kick_node(N1, force))),
+       wait_site_kicked(Sites, Cluster1, S1),
        %% Verify state:
        [?assertSameSet(
-           [Site2, Site3],
-           ?ON(Node, classy:sites()))
-        || Node <- [N2, N3]],
+           [S2, S3],
+           ?ON(I, classy:sites()))
+        || I <- [S2, S3]],
        ?assertEqual(
           [],
-          ?ON(N1, classy:sites())),
-       #{ nodes => Nodes
-        , sites => [Site1, Site2, Site3]
+          ?ON(S1, classy:sites())),
+       #{ nodes => [N1, N2, N3]
+        , sites => Sites
         , clusters => [Cluster1]
         }
-     after
-       classy_ct:teardown_cluster(Cluster)
      end,
      [
      ]).
 
 %% Verify that node can be kicked from the cluster while down:
 t_kick_in_absentia(Conf) ->
-  [C1 | _] = Cluster = classy_ct:cluster([#{}, #{}, #{}], []),
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
   ?check_trace(
-     try
+     begin
        %% Prepare the system:
-       Nodes = [N1 = #{node := Node1}, N2, N3] = classy_ct:start_cluster(classy, Cluster),
-       #{ site := Site1
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       #{ site := S1
         , cluster := Cluster1
-        } = classy_ct:rpc(N1, classy_node, hello, []),
-       #{site := Site2} = ?ON(N2, classy_node:hello()),
-       #{site := Site3} = ?ON(N3, classy_node:hello()),
-       ?assertMatch(ok, ?ON(N2, classy:join_node(Node1, join))),
-       ?assertMatch(ok, ?ON(N3, classy:join_node(Node1, join))),
-       wait_site_joined(Nodes, Cluster1, Site2),
-       wait_site_joined(Nodes, Cluster1, Site3),
-       %% Stop N1:
-       classy_ct:stop_peer(N1),
-       %% Kick N1 from the cluster from N3:
-       ?assertMatch(ok, ?ON(N3, classy:kick_node(Node1, kick))),
-       wait_site_kicked([N2, N3], Cluster1, Site1),
+        } = ?ON(S1, classy_node:hello()),
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertMatch(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster1, S2),
+       wait_site_joined(Sites, Cluster1, S3),
+       %% Stop S1:
+       classy_test_site:stop(S1),
+       %% Kick S1 from the cluster from S:
+       ?assertMatch(ok, ?ON(S3, classy:kick_node(N1, kick))),
+       wait_site_kicked([S2, S3], Cluster1, S1),
        %% Verify state:
        [?assertSameSet(
-           [Site2, Site3],
-           ?ON(Node, classy:sites()))
-        || Node <- [N2, N3]],
-       %% Bring N1 back up:
-       N1_1 = classy_ct:start_peer(classy, C1),
+           [S2, S3],
+           ?ON(I, classy:sites()))
+        || I <- [S2, S3]],
+       %% Bring S1 back up:
+       ok = classy_test_site:start(S1),
        %% It should process the information about getting kicked:
-       wait_site_kicked([N1_1], Cluster1, Site1),
+       wait_site_kicked([S1], Cluster1, S1),
        ct:sleep(1000),
        %% It should not reappear in the sites list:
        [?assertSameSet(
-           [Site2, Site3],
-           ?ON(Node, classy:sites()))
-        || Node <- [N2, N3]],
+           [S2, S3],
+           ?ON(I, classy:sites()))
+        || I <- [S2, S3]],
        ?assertEqual(
           [],
-          ?ON(N1, classy:sites())),
-       #{ nodes => Nodes
-        , sites => [Site1, Site2, Site3]
+          ?ON(S1, classy:sites())),
+       #{ nodes => [N1, N2, N3]
+        , sites => Sites
         , clusters => [Cluster1]
         }
-     after
-       classy_ct:teardown_cluster(Cluster)
      end,
      [ {"kicked_remotely_event",
         fun(#{nodes := [N1 | _]}, Trace) ->
@@ -216,13 +218,17 @@ t_kick_in_absentia(Conf) ->
 
 %% Verify that join and kick can be forbidden via hooks:
 t_pre_checks(Conf) ->
-  Cluster = classy_ct:cluster([#{}, #{}], []),
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  Sites = [S1, S2],
   ?check_trace(
-     try
+     begin
        %% Prepare the system:
-       Nodes = [N1 = #{node := Node1}, N2 = #{node := Node2}]
-         = classy_ct:start_cluster(classy, Cluster),
-       ?ON(N1, classy:pre_join(
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       #{cluster := Cluster2} = ?ON(S2, classy_node:hello()),
+       %% Inject hooks:
+       ?ON(S1, classy:pre_join(
                  fun(_Cluster, _Remote, _Node, Intent) ->
                      case Intent of
                        force -> ok;
@@ -230,7 +236,7 @@ t_pre_checks(Conf) ->
                      end
                  end,
                  0)),
-       ?ON(N2, classy:pre_kick(
+       ?ON(S2, classy:pre_kick(
                  fun(_Cluster, _Remote, Intent) ->
                      case Intent of
                        force -> ok;
@@ -241,21 +247,20 @@ t_pre_checks(Conf) ->
        %% Join is forbidden:
        ?assertEqual(
           {error, forbidden},
-          ?ON(N1, classy:join_node(Node2, join))),
+          ?ON(S1, classy:join_node(N2, join))),
        %% Force join:
        ?assertEqual(
           ok,
-          ?ON(N1, classy:join_node(Node2, force))),
+          ?ON(S1, classy:join_node(N2, force))),
+       wait_site_joined(Sites, Cluster2, S1),
        %% Kick is forbidden:
        ?assertEqual(
           {error, forbidden},
-          ?ON(N2, classy:kick_node(Node1, kick))),
+          ?ON(S2, classy:kick_node(N1, kick))),
        %% Force kick:
        ?assertEqual(
           ok,
-          ?ON(N2, classy:kick_node(Node1, force)))
-     after
-       classy_ct:teardown_cluster(Cluster)
+          ?ON(S2, classy:kick_node(N1, force)))
      end,
      []).
 
@@ -323,6 +328,16 @@ init_per_testcase(TC, Cfg) ->
                }),
   Cfg.
 
+create_start_site(Site, CustomConf) ->
+  Fixture = {classy_test_app,
+             #{ app => classy
+              , env => #{setup_hooks => {?MODULE, setup_hooks, [Site]}}
+              }},
+  Conf = CustomConf#{fixtures => [Fixture]},
+  ?assertMatch(ok, classy_test_cluster:ensure_site(Site, Conf)),
+  ?assertMatch(ok, classy_test_site:start(Site)),
+  classy_test_site:which_node(Site).
+
 end_per_testcase(_TC, Cfg) ->
   ct:pal("EXIT ~p", [Cfg]),
   classy_test_cluster:stop(normal),
@@ -331,9 +346,10 @@ end_per_testcase(_TC, Cfg) ->
 all() ->
   classy_ct:all(?MODULE).
 
-wait_site_joined(Nodes, Cluster, Site) ->
+wait_site_joined(WaitOnSites, Cluster, Site) ->
   lists:foreach(
-    fun(#{node := Node}) ->
+    fun(S) ->
+        Node = classy_test_site:which_node(S),
         ?block_until(
            #{ ?snk_kind := classy_member_join
             , cluster := Cluster
@@ -341,11 +357,12 @@ wait_site_joined(Nodes, Cluster, Site) ->
             , ?snk_meta := #{node := Node}
             })
     end,
-    Nodes).
+    WaitOnSites).
 
-wait_site_kicked(Nodes, Cluster, Site) ->
+wait_site_kicked(WaitOnSites, Cluster, Site) ->
   lists:foreach(
-    fun(#{node := Node}) ->
+    fun(S) ->
+        Node = classy_test_site:which_node(S),
         ?block_until(
            #{ ?snk_kind := classy_member_leave
             , cluster := Cluster
@@ -353,7 +370,7 @@ wait_site_kicked(Nodes, Cluster, Site) ->
             , ?snk_meta := #{node := Node}
             })
     end,
-    Nodes).
+    WaitOnSites).
 
 initialization_hooks(RuntimeData, Trace) ->
   #{ nodes := Nodes
@@ -361,7 +378,7 @@ initialization_hooks(RuntimeData, Trace) ->
    , clusters := Clusters
    } = RuntimeData,
   ?assertSameSet(
-     [maps:get(node, I) || I <- Nodes],
+     Nodes,
      ?projection(node, ?of_kind(classy_on_node_init, Trace))),
   ?assertSameSet(
      Sites,
@@ -369,3 +386,10 @@ initialization_hooks(RuntimeData, Trace) ->
   ?assertSameSet(
      Clusters,
      ?projection(cluster, ?of_kind(classy_create_new_cluster, Trace))).
+
+setup_hooks(Site) ->
+  classy:on_node_init(
+    fun() ->
+        classy_node:maybe_init_the_site(undefined, Site)
+    end,
+    0).

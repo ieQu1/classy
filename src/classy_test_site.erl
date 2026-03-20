@@ -7,6 +7,8 @@
 
 %% API:
 -export([ is_running/1
+        , which_node/1
+
         , start/1
         , start/2
         , stop/1
@@ -57,6 +59,13 @@ start_link(CommonSpec, FixtureState, Site, Spec) ->
 is_running(Site) ->
   gen_server:call(?via(Site), #call_is_running{}).
 
+-spec which_node(classy:site()) -> node().
+which_node(Site) ->
+  case call_method(Site) of
+    {erpc, Node} ->
+      Node
+  end.
+
 -spec start(classy:site()) -> ok | {error, _}.
 start(Site) ->
   start(Site, binary_to_atom(Site)).
@@ -71,20 +80,16 @@ stop(Site) ->
 
 -spec call(classy:site(), module(), atom(), list()) -> _.
 call(Site, Module, Function, Args) ->
-  case persistent_term:get(?call_via(Site), undefined) of
+  case call_method(Site) of
     {erpc, Node} ->
-      erpc:call(Node, Module, Function, Args);
-    undefined ->
-      error({site_is_not_running, Site})
+      erpc:call(Node, Module, Function, Args)
   end.
 
 -spec call(classy:site(), fun(() -> Ret)) -> Ret.
 call(Site, Fun) ->
-  case persistent_term:get(?call_via(Site), undefined) of
+  case call_method(Site) of
     {erpc, Node} ->
-      erpc:call(Node, Fun);
-    undefined ->
-      error({site_is_not_running, Site})
+      erpc:call(Node, Fun)
   end.
 
 %%================================================================================
@@ -117,10 +122,11 @@ init([CommonSpec, FixtureState0, Site, CustomSiteSpec]) ->
   DefaultSiteSpec =
     #{ peer => #{name => binary_to_atom(Site)}
      },
-  SiteSpec = lists:foldl(
+  SiteSpec = lists:foldr(
                fun classy_test_cluster:merge_conf/2,
-               DefaultCommonSpec,
-               [ CommonSpec
+               #{},
+               [ DefaultCommonSpec
+               , CommonSpec
                , DefaultSiteSpec
                , CustomSiteSpec
                ]),
@@ -242,3 +248,11 @@ do_stop(S) ->
           , name = undefined
           , node_fixture_state = undefined
           }}.
+
+call_method(Site) ->
+  case persistent_term:get(?call_via(Site), undefined) of
+    undefined ->
+      error({site_is_not_running, Site});
+    Other ->
+      Other
+  end.
