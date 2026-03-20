@@ -1,0 +1,135 @@
+%%--------------------------------------------------------------------
+%% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
+%%--------------------------------------------------------------------
+-module(classy_test_cluster).
+
+-behavior(supervisor).
+
+%% API:
+-export([start_link/1, stop/1, ensure_site/2, merge_conf/2]).
+
+%% behavior callbacks:
+-export([init/1]).
+
+%% internal exports:
+-export([ start_link_site_sup/2
+        , start_link_cleanup/2
+        , cluster_cleanup_entrypoint/3
+        ]).
+
+-export_type([conf/0]).
+
+%%================================================================================
+%% Type declarations
+%%================================================================================
+
+-define(top, classy_test_cluster).
+-define(sites, classy_test_cluster_sites).
+
+-type conf() ::
+        #{ peer => map()
+         , fixtures => [classy_test_fixture:t()]
+         }.
+
+%%================================================================================
+%% API functions
+%%================================================================================
+
+-spec start_link(classy_test_site:conf()) -> supervisor:startlink_ret().
+start_link(Conf = #{fixtures := Fixtures}) when is_list(Fixtures) ->
+  {ok, _} = application:ensure_all_started(gproc),
+  supervisor:start_link({local, ?top}, ?MODULE, {top, Conf}).
+
+-spec ensure_site(classy:site(), classy_test_site:conf()) -> ok | {error, _}.
+ensure_site(Site, Conf) ->
+  case supervisor:start_child(?sites, [Site, Conf]) of
+    {ok, _} ->
+      ok;
+    {error, {already_started, _}} ->
+      ok;
+    Err ->
+      Err
+  end.
+
+-spec stop(_Reason) -> ok.
+stop(Reason) ->
+  classy_lib:sync_stop_proc(?top, Reason, infinity).
+
+-spec merge_conf(conf(), conf()) -> conf().
+merge_conf(C1, C2) ->
+  maps:merge_with(
+    fun(fixtures, A, B) ->
+        A ++ B;
+       (peer, A, B) ->
+        maps:merge(A, B)
+    end,
+    C1,
+    C2).
+
+%%================================================================================
+%% Internal exports
+%%================================================================================
+
+start_link_site_sup(Conf, FixtureState) ->
+  supervisor:start_link({local, ?sites}, ?MODULE, {sites, Conf, FixtureState}).
+
+start_link_cleanup(Fixtures, FixtureState) ->
+  proc_lib:start_link(?MODULE, cluster_cleanup_entrypoint, [self(), Fixtures, FixtureState]).
+
+cluster_cleanup_entrypoint(Parent, Fixtures, FixtureState) ->
+  process_flag(trap_exit, true),
+  proc_lib:init_ack(Parent, {ok, self()}),
+  receive
+    {'EXIT', _, Reason} ->
+      classy_test_fixture:cleanup_per_cluster(
+        Fixtures,
+        classy_test_fixture:exit_reason_to_success(Reason),
+        FixtureState)
+  end.
+
+%%================================================================================
+%% behavior callbacks
+%%================================================================================
+
+init({top, Conf}) ->
+  #{fixtures := Fixtures} = Conf,
+  case classy_test_fixture:init_per_cluster(Fixtures) of
+    {ok, FixtureState} ->
+      SupFlags = #{ strategy  => one_for_all
+                  , intensity => 1
+                  , period    => 1
+                  },
+      Children = [ #{ id => cleanup
+                    , type => worker
+                    , restart => permanent
+                    , start => {?MODULE, start_link_cleanup, [Fixtures, FixtureState]}
+                    , shutdown => 30_000
+                    }
+                 , #{ id => sites
+                    , type => supervisor
+                    , restart => permanent
+                    , start => {?MODULE, start_link_site_sup, [Conf, FixtureState]}
+                    , shutdown => infinity
+                    }
+                 ],
+      {ok, {SupFlags, Children}};
+    {error, Err}->
+      error({cluster_initialization_failed, Err})
+  end;
+init({sites, CommonConf, FixtureState}) ->
+  SupFlags = #{ strategy      => simple_one_for_one
+              , intensity     => 10
+              , period        => 1
+              , auto_shutdown => never
+              },
+  Children = #{ id       => peer
+              , type     => worker
+              , start    => {classy_test_site, start_link, [CommonConf, FixtureState]}
+              , shutdown => 5_000
+              , restart  => temporary
+              },
+  {ok, {SupFlags, [Children]}}.
+
+%%================================================================================
+%% Internal functions
+%%================================================================================

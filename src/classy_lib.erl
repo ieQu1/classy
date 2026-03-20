@@ -14,6 +14,9 @@
 
         , wakeup_after/3
         , cancel_wakeup/1
+
+        , sync_stop_proc/3
+        , ensure_list/1
         ]).
 
 -export_type([unix_time_s/0, wakeup_timer/0]).
@@ -72,6 +75,28 @@ cancel_wakeup(undefined) ->
 cancel_wakeup({_, TRef}) ->
   erlang:cancel_timer(TRef),
   undefined.
+
+-spec sync_stop_proc(pid() | atom(), _ExitReason, timeout()) -> ok.
+sync_stop_proc(undefined, _, _) ->
+  ok;
+sync_stop_proc(Name, Reason, Timeout) when is_atom(Name) ->
+  sync_stop_proc(whereis(Name), Reason, Timeout);
+sync_stop_proc(Pid, Reason, Timeout) when is_pid(Pid) ->
+  unlink(Pid),
+  MRef = monitor(process, Pid),
+  exit(Pid, Reason),
+  receive
+    {'DOWN', MRef, process, _, _} ->
+      ok
+  after Timeout ->
+      {error, timeout}
+  end.
+
+-spec ensure_list(binary() | string()) -> string().
+ensure_list(L) when is_list(L) ->
+  L;
+ensure_list(Bin) when is_binary(Bin) ->
+  binary_to_list(Bin).
 
 %%================================================================================
 %% Internal functions

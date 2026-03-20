@@ -415,7 +415,7 @@ is_log(Filename) ->
 
 open_log(Filename, Mode) ->
   Opts = [ {name, make_ref()}
-         , {file, ensure_list(Filename)}
+         , {file, classy_lib:ensure_list(Filename)}
          , {mode, Mode}
          , {format, internal}
          , {type, halt}
@@ -455,8 +455,3 @@ read_log_chunk(Log, Cont, Size) ->
   end.
 
 -endif.
-
-ensure_list(L) when is_list(L) ->
-  L;
-ensure_list(Bin) when is_binary(Bin) ->
-  binary_to_list(Bin).

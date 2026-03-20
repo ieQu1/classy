@@ -10,13 +10,45 @@
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 -include_lib("proper/include/proper.hrl").
 
--define(ON(NODE, BODY), classy_ct:rpc(NODE, erlang, apply, [fun() -> BODY end, []])).
+-define(ON(SITE, BODY), classy_test_site:call(SITE, fun() -> BODY end)).
 
 -define(assertSameSet(EXP, GOT), ?assertEqual(lists:sort(EXP), lists:sort(GOT))).
 
 %%================================================================================
 %% Tests
 %%================================================================================
+
+t_cluster(_Conf) ->
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       %% Create site and ensure that this operation is idempotent:
+       ?assertMatch(ok, classy_test_cluster:ensure_site(<<"foo">>, #{})),
+       ?assertMatch(ok, classy_test_cluster:ensure_site(<<"foo">>, #{})),
+       %% Check that error message is legible when calling a stopped site:
+       ?assertError(
+          {site_is_not_running, <<"foo">>},
+          classy_test_site:call(<<"foo">>,
+                                fun() ->
+                                    ok
+                                end)),
+       %% Start site:
+       ?assertMatch(ok, classy_test_site:start(<<"foo">>)),
+       ?assertMatch({error, already_started}, classy_test_site:start(<<"foo">>)),
+       %% Test calls and log forwarding:
+       ?assertMatch('foo@127.0.0.1', classy_test_site:call(<<"foo">>, erlang, node, [])),
+       ?assertMatch(
+          ok,
+          classy_test_site:call(<<"foo">>,
+                                fun() ->
+                                    ?tp(test_msg_from_foo, #{})
+                                end)),
+       ?block_until(#{?snk_kind := test_msg_from_foo}),
+       %% Test stopping idempotency:
+       ?assertMatch(ok, classy_test_site:stop(<<"foo">>)),
+       ?assertMatch(ok, classy_test_site:stop(<<"foo">>))
+     end,
+     []).
 
 %% This testcase verifies happy case of joining one node to another:
 t_join(Conf) ->
@@ -283,6 +315,19 @@ init_per_suite(Cfg) ->
 end_per_suite(Cfg) ->
   Cfg.
 
+init_per_testcase(TC, Cfg) ->
+  Fixtures = [ {classy_test_snabbkaffe, #{}}
+             ],
+  {ok, _} = classy_test_cluster:start_link(
+              #{ fixtures => classy_test_fixture:defaults(TC) ++ Fixtures
+               }),
+  Cfg.
+
+end_per_testcase(_TC, Cfg) ->
+  ct:pal("EXIT ~p", [Cfg]),
+  classy_test_cluster:stop(normal),
+  snabbkaffe:stop().
+
 all() ->
   classy_ct:all(?MODULE).
 
@@ -324,6 +369,3 @@ initialization_hooks(RuntimeData, Trace) ->
   ?assertSameSet(
      Clusters,
      ?projection(cluster, ?of_kind(classy_create_new_cluster, Trace))).
-
-end_per_testcase(_, _) ->
-  snabbkaffe:stop().

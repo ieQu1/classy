@@ -103,10 +103,12 @@ nodes(running) ->
   maybe
     {ok, Cluster} ?= classy_node:the_cluster(),
     {ok, Local} ?= classy_node:the_site(),
+    %% FIXME: optimize
+    Members = classy_membership:members(Cluster, Local),
     Sites = classy_membership:site_of_node(Cluster, Local),
     [I || I <- [node() | erlang:nodes()],
           case Sites of
-            #{I := _} -> true;
+            #{I := Site} -> lists:member(Site, Members);
             _ -> false
           end]
   else _ ->
@@ -118,7 +120,16 @@ nodes(all) ->
   maybe
     {ok, Cluster} ?= classy_node:the_cluster(),
     {ok, Local} ?= classy_node:the_site(),
-    maps:keys(classy_membership:site_of_node(Cluster, Local))
+    Sites = classy_membership:members(Cluster, Local),
+    Nodes = classy_membership:node_of_site(Cluster, Local),
+    lists:flatmap(
+      fun(Site) ->
+          case Nodes of
+            #{Site := Node} -> [Node];
+            #{} -> []
+          end
+      end,
+      Sites)
   else
     _ ->
       []

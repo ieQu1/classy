@@ -9,6 +9,7 @@
 -behaviour(proper_statem).
 
 -include_lib("proper/include/proper.hrl").
+-include_lib("stdlib/include/assert.hrl").
 
 %%--------------------------------------------------------------------
 %% Types
@@ -211,9 +212,12 @@ next_state(S = #{run_state := _}, Ret, {call, ?MODULE, start_site, [Site, _]}) -
   set_running(Site, true, S#{run_state := Ret});
 next_state(S = #{sites := Sites}, _Ret, {call, ?MODULE, join_node, [Site, JoinToSite, _JoinToNode, _]}) ->
   #{ Site := SState
-   , JoinToSite := #{cluster := Cluster}
+   , JoinToSite := #{cluster := Cluster, running := IsRunning}
    } = Sites,
-  S#{sites := Sites#{Site := SState#{cluster := Cluster}}}.
+  case IsRunning of
+    true  -> S#{sites := Sites#{Site := SState#{cluster := Cluster}}};
+    false -> S
+  end.
 
 precondition(_, _) ->
     true.
@@ -221,12 +225,15 @@ precondition(_, _) ->
 postcondition(PrevState, Call, Result) ->
   CurrentState = next_state(PrevState, Result, Call),
   case Call of
-    {call, ?MODULE, consume, _} ->
-      %% FIXME
-      Result =:= ok;
+   {call, ?MODULE, join_node, [Site, JoinToSite | _]} ->
+      case is_running(JoinToSite, CurrentState) of
+        true -> ?assertMatch(ok, Result);
+        false -> ?assertMatch({error, _}, Result)
+      end;
     _ ->
       true
-  end and check_invariants(CurrentState).
+  end,
+  check_invariants(CurrentState).
 
 %%--------------------------------------------------------------------
 %% Misc.
@@ -246,3 +253,15 @@ set_running(Site, IsRunning, S = #{sites := Sites0}) ->
             end,
             Sites0),
   S#{sites := Sites}.
+
+is_running(Site, #{sites := Sites}) ->
+  #{Site := #{running := Ret}} = Sites,
+  Ret.
+
+sites_and_nodes(#{sites := Sites}) ->
+  maps:fold(
+    fun(Site, #{peer_spec := Spec}, Acc) ->
+        [{Site, classy_ct:node_name(Spec)} | Acc]
+    end,
+    [],
+    Sites).

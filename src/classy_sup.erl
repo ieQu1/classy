@@ -44,20 +44,7 @@ start_link() ->
 
 -spec stop(timeout()) -> ok.
 stop(Timeout) ->
-  case whereis(?SUP) of
-    Pid when is_pid(Pid) ->
-      unlink(Pid),
-      MRef = monitor(process, Pid),
-      exit(Pid, shutdown),
-      receive
-        {'DOWN', MRef, process, _, _} ->
-          ok
-      after Timeout ->
-          {error, timeout}
-      end;
-    undefined ->
-      ok
-  end.
+  classy_lib:sync_stop_proc(?SUP, shutdown, Timeout).
 
 -spec start_table(classy_table:tab(), classy_table:options()) -> {ok, pid()} | {error, _}.
 start_table(Tab, Options) ->
