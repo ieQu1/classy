@@ -1,6 +1,19 @@
 %%--------------------------------------------------------------------
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
+
+%% @doc A process that manages test clusters.
+%%
+%% This module is not part of the classy runtime,
+%% but it's useful for testing the business apps based on classy.
+%%
+%% Cluster configuration:
+%% <itemize>
+%% <li>`peer': <a href="https://www.erlang.org/doc/apps/stdlib/peer.html#t:start_options/0">peer</a> start options.
+%% Optional.</li>
+%% <li>`fixtures': list of {@link classy_test_fixture . fixtures}.
+%% Mandatory.</li>
+%% </itemize>
 -module(classy_test_cluster).
 
 -behavior(supervisor).
@@ -35,11 +48,14 @@
 %% API functions
 %%================================================================================
 
+%% @doc Start the cluster.
 -spec start_link(classy_test_site:conf()) -> supervisor:startlink_ret().
 start_link(Conf = #{fixtures := Fixtures}) when is_list(Fixtures) ->
   {ok, _} = application:ensure_all_started(gproc),
   supervisor:start_link({local, ?top}, ?MODULE, {top, Conf}).
 
+%% @doc Create a site, if not created yet.
+%% Note: this function doesn't start the site.
 -spec ensure_site(classy:site(), classy_test_site:conf()) -> ok | {error, _}.
 ensure_site(Site, Conf) ->
   case supervisor:start_child(?sites, [Site, Conf]) of
@@ -51,10 +67,12 @@ ensure_site(Site, Conf) ->
       Err
   end.
 
+%% @doc Stop the cluster.
 -spec stop(_Reason) -> ok.
 stop(Reason) ->
   classy_lib:sync_stop_proc(?top, Reason, infinity).
 
+%% @doc Merge cluster configuration.
 -spec merge_conf(conf(), conf()) -> conf().
 merge_conf(C1, C2) ->
   maps:merge_with(
@@ -70,12 +88,15 @@ merge_conf(C1, C2) ->
 %% Internal exports
 %%================================================================================
 
+%% @private
 start_link_site_sup(Conf, FixtureState) ->
   supervisor:start_link({local, ?sites}, ?MODULE, {sites, Conf, FixtureState}).
 
+%% @private
 start_link_cleanup(Fixtures, FixtureState) ->
   proc_lib:start_link(?MODULE, cluster_cleanup_entrypoint, [self(), Fixtures, FixtureState]).
 
+%% @private
 cluster_cleanup_entrypoint(Parent, Fixtures, FixtureState) ->
   process_flag(trap_exit, true),
   proc_lib:init_ack(Parent, {ok, self()}),
@@ -91,6 +112,7 @@ cluster_cleanup_entrypoint(Parent, Fixtures, FixtureState) ->
 %% behavior callbacks
 %%================================================================================
 
+%% @private
 init({top, Conf}) ->
   #{fixtures := Fixtures} = Conf,
   case classy_test_fixture:init_per_cluster(Fixtures) of

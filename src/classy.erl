@@ -98,7 +98,7 @@ sites() ->
       []
   end.
 
--spec nodes(all | running | stopped) -> [{site(), node()}].
+-spec nodes(all | running | stopped) -> [node()].
 nodes(running) ->
   maybe
     {ok, Cluster} ?= classy_node:the_cluster(),
@@ -141,10 +141,11 @@ nodes(all) ->
 
 %% @doc Calculate the number of nodes required for the quorum:
 %%
-%% - `Integer': any integer value
-%% - `config': Return value of `classy.quorum' application environment variable
-%% - `running': Quorum among the running sites.
-%%    Returned value is greater or equal to `quorum(config)'
+%% <itemize>
+%% <li>`Integer': any integer value</li>
+%% <li>`config': Return value of `classy.quorum' application environment variable</li>
+%% <li> `running': Quorum among the running sites, not less than `quorum(config)'</li>
+%% </itemize>
 -spec quorum(config | running | non_neg_integer()) -> pos_integer().
 quorum(N) when is_integer(N), N >= 0 ->
   trunc(N / 2) + 1;

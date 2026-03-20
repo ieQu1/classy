@@ -1,6 +1,8 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2025-2026 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
+
+%% @doc Text fixture that forwards snabbkaffe logs from the node.
 -module(classy_test_snabbkaffe).
 
 -behavior(classy_test_fixture).
@@ -20,6 +22,7 @@
 %% behavior callbacks
 %%================================================================================
 
+%% @private
 init_per_node(_Site, Node, _Conf, State) ->
   ok = snabbkaffe:forward_trace(Node),
   {ok, State}.

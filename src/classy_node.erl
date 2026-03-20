@@ -55,15 +55,21 @@
 %% API functions
 %%================================================================================
 
+%% @doc Initialize the local site.
+%%
+%% Values that are not persistently stored are set to the given values.
+%% Any `undefined' argument is replaced with a sufficiently unique random string.
 -spec maybe_init_the_site(classy:cluster_id() | undefined, classy:site() | undefined) -> ok.
 maybe_init_the_site(MaybeCluster, MaybeSite) ->
   ensure_value(?the_site, ?on_create_site, MaybeSite),
   ensure_value(?the_cluster, ?on_create_cluster, MaybeCluster).
 
+%% @private
 -spec start_link() -> {ok, pid()}.
 start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
+%% @doc Return ID of the cluster that the node currently belongs to.
 -spec the_cluster() -> {ok, classy:cluster_id()} | undefined.
 the_cluster() ->
   case classy_table:lookup(?ptab, ?the_cluster) of
@@ -71,6 +77,7 @@ the_cluster() ->
     []   -> undefined
   end.
 
+%% @doc Return ID of the local site.
 -spec the_site() -> {ok, classy:site()} | undefined.
 the_site() ->
   case classy_table:lookup(?ptab, ?the_site) of
@@ -78,6 +85,9 @@ the_site() ->
     []  -> undefined
   end.
 
+%% @doc Join to the cluster that `Node' belongs to.
+%%
+%% This function performs all necessary checks before making any changes.
 -spec join_node(node(), _Intent) -> ok | {error, _}.
 join_node(Node, Intent) ->
   gen_server:call(
@@ -85,6 +95,10 @@ join_node(Node, Intent) ->
     #call_join{node = Node, intent = Intent},
     infinity).
 
+%% @doc Kick a site from the cluster.
+%%
+%% This function performs all necessary checks before making any changes.
+%% It can be used with the local site as well.
 -spec kick_site(classy:site(), _Intent) -> ok | {error, _}.
 kick_site(Site, Intent) ->
   gen_server:call(
@@ -102,6 +116,7 @@ kick_site(Site, Intent) ->
         , run_level = 0 :: run_level_int()
         }).
 
+%% @private
 init(_) ->
   process_flag(trap_exit, true),
   %% logger:update_process_metadata(#{domain => [classy, node]}),
@@ -128,6 +143,7 @@ init(_) ->
       {stop, default_site_not_initialized, undefined}
   end.
 
+%% @private
 handle_call(#call_join{node = Node, intent = Intent}, _From, S0) ->
   case handle_join(Node, S0, Intent) of
     {ok, S} ->
@@ -154,6 +170,7 @@ handle_call(Call, From, S) ->
        }),
   {reply, {error, unknown_call}, S}.
 
+%% @private
 handle_cast(#cast_membership_change{} = Cast, S) ->
   {noreply, handle_membership_change_event(Cast, S)};
 handle_cast(Cast, S) ->
@@ -164,6 +181,7 @@ handle_cast(Cast, S) ->
        }),
   {noreply, S}.
 
+%% @private
 handle_info({NodeUpOrDown, _Node, _}, S) when NodeUpOrDown =:= nodeup; NodeUpOrDown =:= nodedown ->
   {noreply, adjust_run_level(S)};
 handle_info({'EXIT', _, shutdown}, S) ->
@@ -176,6 +194,7 @@ handle_info(Info, S) ->
        }),
   {noreply, S}.
 
+%% @private
 terminate(_Reason, _S) ->
   ok.
 
@@ -183,6 +202,8 @@ terminate(_Reason, _S) ->
 %% Internal exports
 %%================================================================================
 
+%% @doc Called by remote node during `join'.
+%% Returns information about the local site, used for bootstrapping the remote.
 hello() ->
   maybe
     {ok, Cluster} ?= the_cluster(),

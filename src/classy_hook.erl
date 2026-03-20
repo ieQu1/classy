@@ -1,6 +1,8 @@
 %%--------------------------------------------------------------------
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
+
+%% @doc Module responsible for managing the hooks.
 -module(classy_hook).
 
 %% API:
@@ -35,6 +37,7 @@
 %% API functions
 %%================================================================================
 
+%% @private
 init() ->
   ets:new(?tab, [named_table, ordered_set, public, {keypos, 1}]),
   %% Default initialization:
@@ -110,17 +113,22 @@ init() ->
       ok
   end.
 
+%% @private
 -spec insert(hookpoint(), fun(), prio()) -> hook().
 insert(Hookpoint, Hook, Prio) when is_atom(Hookpoint), is_integer(Prio), is_function(Hook) ->
   Key = {Hookpoint, -Prio, Hook},
   ets:insert(?tab, {Key}),
   Key.
 
+%% @doc Remove a previosuly inserted hook
 -spec unhook(hook()) -> ok.
 unhook(Key) ->
   ets:delete(?tab, Key),
   ok.
 
+%% @doc Execute all functions hooked into `Hookpoint'.
+%%
+%% Errors are ignored (logged)
 -spec foreach(hookpoint(), list()) -> ok.
 foreach(Hookpoint, Args) ->
   lists:foreach(
@@ -137,6 +145,10 @@ foreach(Hookpoint, Args) ->
     end,
     hooks(Hookpoint)).
 
+%% @doc Ensure that all functions hooked into `Hookpoint' return `ok'.
+%%
+%% If any of the function returns `{error, _}' or throws an exception,
+%% this function returns `{error, _}'.
 -spec all(hookpoint(), list()) -> ok | {error, _}.
 all(Hookpoint, Args) ->
   try

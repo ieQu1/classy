@@ -1,6 +1,19 @@
 %%--------------------------------------------------------------------
 %% Copyright (c) 2025-2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
+
+%% @doc Test fixture that configures and starts an OTP application.
+%%
+%% Configuration:
+%%
+%% <itemize>
+%% <li>`app': OTP application</li>
+%% <li>`env': Application environment variables to set,
+%% represented as a key-value map.
+%% Default is `#{}'.</li>
+%% <li>`start': `true', start the application. `false', just load.
+%% Default is `true'</li>
+%% </itemize>
 -module(classy_test_app).
 
 -behavior(classy_test_fixture).
@@ -23,7 +36,8 @@
 %% behavior callbacks
 %%================================================================================
 
-init_per_node(Site, Node, Conf, State) ->
+%% @private
+init_per_node(Site, _Node, Conf, State) ->
   Defaults = #{ env   => #{}
               , start => true
               },
@@ -49,6 +63,7 @@ init_per_node(Site, Node, Conf, State) ->
   end,
   {ok, State#{{?MODULE, App} => Started}}.
 
+%% @private
 cleanup_per_node(Site, _Node, #{app := App}, State) ->
   #{{?MODULE, App} := Started} = State,
   classy_test_site:call(

@@ -90,6 +90,7 @@ open(Tab, Options) when is_atom(Tab), is_map(Options) ->
       Err
   end.
 
+%% @doc Close the table.
 -spec stop(tab(), timeout()) -> ok | {error, timeout}.
 stop(Tab, Timeout) ->
   case gproc:where(?name(Tab)) of
@@ -142,6 +143,7 @@ force_compaction(Tab) ->
 drop(Tab) ->
   gen_server:call(?via(Tab), #call_drop{}, infinity).
 
+%% @doc Lookup a value from the table.
 -spec lookup(tab(), _Key) -> [_Val].
 lookup(Tab, Key) ->
   [V || #classy_kv{v = V} <- ets:lookup(Tab, Key)].
@@ -150,6 +152,7 @@ lookup(Tab, Key) ->
 %% Internal exports
 %%================================================================================
 
+%% @private
 -spec start_link(tab(), options()) -> {ok, pid()}.
 start_link(Tab, Options) ->
   gen_server:start_link(?via(Tab), ?MODULE, [Tab, Options], []).
@@ -170,6 +173,7 @@ start_link(Tab, Options) ->
 
 -type s() :: #s{}.
 
+%% @private
 init([TabName, Options]) ->
   process_flag(trap_exit, true),
   ETSOpts = maps:get(ets_options, Options, [set]),
@@ -182,9 +186,11 @@ init([TabName, Options]) ->
         },
   {ok, S, {continue, restore}}.
 
+%% @private
 handle_continue(restore, S) ->
   {noreply, restore(S)}.
 
+%% @private
 handle_call(#call_ensure_open{}, _From, S) ->
   {reply, ok, S};
 handle_call(#call_write{} = C, _From, S) ->
@@ -212,6 +218,7 @@ handle_call(Call, From, S) ->
        }),
   {reply, {error, unknown_call}, S}.
 
+%% @private
 handle_cast(Cast, S) ->
   ?tp(warning, classy_unknown_event,
       #{ kind => cast
@@ -220,6 +227,7 @@ handle_cast(Cast, S) ->
        }),
   {noreply, S}.
 
+%% @private
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
 handle_info(Info, S) ->
@@ -230,6 +238,7 @@ handle_info(Info, S) ->
        }),
   {noreply, S}.
 
+%% @private
 terminate(_, undefined) ->
   ok;
 terminate(_Reason, S = #s{}) ->

@@ -51,14 +51,18 @@
 %% API functions
 %%================================================================================
 
+%% @private
 -spec start_link(conf(), classy_test_fixture:state(), classy:site(), conf()) -> {ok, pid()}.
 start_link(CommonSpec, FixtureState, Site, Spec) ->
   gen_server:start_link(?via(Site), ?MODULE, [CommonSpec, FixtureState, Site, Spec], []).
 
+%% @doc Is site running?
 -spec is_running(classy:site()) -> boolean().
 is_running(Site) ->
   gen_server:call(?via(Site), #call_is_running{}).
 
+%% @doc Return current node name of the site.
+%% Throws an error if site is not running.
 -spec which_node(classy:site()) -> node().
 which_node(Site) ->
   case call_method(Site) of
@@ -66,18 +70,31 @@ which_node(Site) ->
       Node
   end.
 
+%% @doc Start the site if stopped.
+%%
+%% Can return `{error, already_running}'.
 -spec start(classy:site()) -> ok | {error, _}.
 start(Site) ->
   start(Site, binary_to_atom(Site)).
 
+
+%% @doc Start the site if stopped, using `NodeName' as a prefix for the node.
+%% Resulting node will be named `NodeName@Host'.
+%%
+%% Can return `{error, already_running}'.
 -spec start(classy:site(), atom()) -> ok | {error, _}.
 start(Site, NodeName) ->
   gen_server:call(?via(Site), #call_start{name = NodeName}, infinity).
 
+%% @doc Stop the site's node.
+%%
+%% Note: this function doesn't destroy the site: it can be restarted later.
 -spec stop(classy:site()) -> ok.
 stop(Site) ->
   gen_server:call(?via(Site), #call_stop{}, infinity).
 
+%% @doc Execute MFA on the site.
+%% Site must be running.
 -spec call(classy:site(), module(), atom(), list()) -> _.
 call(Site, Module, Function, Args) ->
   case call_method(Site) of
@@ -85,6 +102,8 @@ call(Site, Module, Function, Args) ->
       erpc:call(Node, Module, Function, Args)
   end.
 
+%% @doc Execute `Fun' on the site.
+%% Site must be running.
 -spec call(classy:site(), fun(() -> Ret)) -> Ret.
 call(Site, Fun) ->
   case call_method(Site) of
@@ -107,6 +126,7 @@ call(Site, Fun) ->
         , my_path            :: string()
         }).
 
+%% @private
 init([CommonSpec, FixtureState0, Site, CustomSiteSpec]) ->
   process_flag(trap_exit, true),
   MyPath = filename:dirname(code:which(?MODULE)),
@@ -142,6 +162,7 @@ init([CommonSpec, FixtureState0, Site, CustomSiteSpec]) ->
       {stop, Reason}
   end.
 
+%% @private
 handle_call(#call_start{name = Name}, _From, S0 = #s{pid = Pid}) ->
   case Pid of
     undefined ->
@@ -168,14 +189,17 @@ handle_call(#call_is_running{}, _From, S = #s{pid = Pid}) ->
 handle_call(_Call, _From, S) ->
   {reply, {error, unknown_call}, S}.
 
+%% @private
 handle_cast(_Cast, S) ->
   {noreply, S}.
 
+%% @private
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
 handle_info(_Info, S) ->
   {noreply, S}.
 
+%% @private
 terminate(Reason, S0 = #s{site = Site, spec = Spec, fixture_state = FS}) ->
   _ = do_stop(S0),
   Success = classy_test_fixture:exit_reason_to_success(Reason),

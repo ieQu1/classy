@@ -138,12 +138,12 @@
 %% API functions
 %%================================================================================
 
-%% Low-level call that sets `Target''s membership state to `true'.
+%% @doc Low-level call that sets `Target''s membership state to `true'.
 %%
 %% WARNING: this function does not check if target site exists and/or is part of cluster.
 %% When called with invalid `Target',
 %% it will create a new entry that will eventually make its way to the entire cluster.
-%% This fictitious site will exist in `down` state until kicked,
+%% This fictitious site will become a member until kicked,
 %% and even then some records about it may be kept around.
 -spec set_member(classy:cluster_id(), classy:site(), classy:site(), boolean()) -> ok | {error, _}.
 set_member(Cluster, Local, Target, Mem) when is_boolean(Mem) ->
@@ -170,6 +170,7 @@ members(Cluster, Local) ->
        },
   ets:select(?ptab, [MS]).
 
+%% @doc List local sites and clusters.
 -spec list_local_sites(running | all) -> [{classy:cluster_id(), classy:site()}].
 list_local_sites(running) ->
   MS = {{?name('$1', '$2'), '_', '_'}, [], [{{'$1', '$2'}}]},
@@ -184,10 +185,16 @@ list_local_sites(all) ->
        },
   ets:select(?ptab, [MS]).
 
+%% @doc Return mapping of nodes to sites.
+%%
+%% WARNING: it includes kicked members.
 -spec site_of_node(classy:cluster_id(), classy:site()) -> #{node() => classy:site()}.
 site_of_node(Cluster, Local) ->
   maps:from_list(select_nodes(Cluster, Local, {{'$2', '$1'}})).
 
+%% @doc Return mapping of sites to nodes.
+%%
+%% WARNING: it includes kicked members.
 -spec node_of_site(classy:cluster_id(), classy:site()) -> #{classy:site() => node()}.
 node_of_site(Cluster, Local) ->
   maps:from_list(select_nodes(Cluster, Local, {{'$1', '$2'}})).
@@ -207,15 +214,18 @@ flush(Cluster, Local) ->
 %% Internal exports
 %%================================================================================
 
+%% @private
 -spec start_link(classy:cluster_id(), classy:site()) -> {ok, pid()}.
 start_link(Cluster, Local) ->
   Args = #{cluster => Cluster, site => Local},
   gen_server:start_link(?via(Cluster, Local), ?MODULE, Args, []).
 
+%% @doc Send membership data to the process
 -spec cast_sync(classy:cluster_id(), classy:site(), sync_data()) -> ok.
 cast_sync(Cluster, Site, Cast) ->
   gen_server:cast(?via(Cluster, Site), Cast).
 
+%% @doc Get membership data
 -spec get_data(classy:cluster_id(), classy:site(), clock(), clock()) -> sync_data().
 get_data(Cluster, Local, Since, Acked) ->
   gen_server:call(?via(Cluster, Local), #call_get_data{since = Since, acked = Acked}).
@@ -224,6 +234,7 @@ get_data(Cluster, Local, Since, Acked) ->
 %% behavior callbacks
 %%================================================================================
 
+%% @private
 -spec init(start_args()) -> {ok, #s{}}.
 init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluster) ->
   process_flag(trap_exit, true),
@@ -259,6 +270,7 @@ init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluste
         S1),
   {ok, need_sync(0, S)}.
 
+%% @private
 handle_call(#call_set{} = CMD, _From, S0) ->
   S = local_command(CMD, S0),
   {reply, ok, S};
@@ -279,6 +291,7 @@ handle_call(Call, From, S) ->
        }),
   {reply, {error, unknown_call}, S}.
 
+%% @private
 handle_cast(#cast_sync{} = Req, S0) ->
   S = handle_sync_in(Req, S0),
   run_hooks(S),
@@ -291,6 +304,7 @@ handle_cast(Cast, S) ->
        }),
   {noreply, S}.
 
+%% @private
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
 handle_info(#to_sync_out{}, S0) ->
@@ -304,6 +318,7 @@ handle_info(Info, S) ->
        }),
   {noreply, S}.
 
+%% @private
 terminate(_Reason, #s{}) ->
   classy_table:flush(?ptab).
 
@@ -328,7 +343,7 @@ handle_sync(S0) ->
 %% These adverse side effects can be observed when conflicting commands are issued on different nodes faster than the nodes sync with each other.
 %% This is most likely to happen during a network partition.
 %%
-%% Please see `theories/classy.v` for more details and some intricate requirements for `ord` function.
+%% Please see `theories/classy.v` for more details and some intricate requirements for `ord' function.
 -spec ord(op()) -> ord().
 ord(#op_set{c = C, m = M, origin = O}) ->
   {C, M, O}.
