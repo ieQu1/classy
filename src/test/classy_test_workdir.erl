@@ -78,7 +78,7 @@ init_per_site(Site, _Conf, State = #{workdir := WDC}) ->
 
 %% @private
 init_per_node(Site, _Node, _Conf, State = #{workdir := WD}) ->
-  case classy_test_site:call(Site, fun() -> file:set_cwd(WD) end) of
+  case classy_test_site:call(Site, file, set_cwd, [WD]) of
     ok ->
       {ok, State};
     Err ->

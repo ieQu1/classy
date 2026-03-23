@@ -39,9 +39,9 @@ init_per_cluster(Conf, State) ->
 
 %% @private
 init_per_node(Site, _Node, _Conf, State = #{code_paths := CP}) ->
-  classy_test_site:call(
-    Site,
-    fun() ->
-        lists:foreach(fun code:add_patha/1, CP)
-    end),
+  lists:foreach(
+    fun(Path) ->
+        classy_test_site:call(Site, code, add_patha, [Path])
+    end,
+    CP),
   {ok, State}.

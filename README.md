@@ -7,8 +7,8 @@ An application that helps managing a cluster of Erlang nodes.
 
 - Site ID: a random unique identifier of the node that persists between the restarts and host name changes.
 - Cluster ID: a random unique identifier of the cluster.
-- Run stage: global system state derived from the configuration and the number of peers.
-  There are the following run stages:
+- Run level: global system state derived from the configuration and the number of peers.
+  There are the following run levels:
   + `stopped`: classy is stopped
   + `single`: classy application is running and exchanging membership information
   + `cluster`: number of known peers is >= `n_sites` configuration parameter.

@@ -1,6 +1,27 @@
 %%--------------------------------------------------------------------
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
+
+%% @doc Test fixture behavior.
+%%
+%% Test fixture behavior allows to define reusable test environment
+%% setup routines, for example creating a working directory or
+%% starting an OTP application.
+%%
+%% == Behavior callbacks ==
+%%
+%% <itemize>
+%% <li>`init_per_cluster' / `cleanup_per_cluster': executed by
+%% `classy_test_cluster' during cluster initialization and
+%% termination.</li>
+%% <li>`init_per_site' / `cleanup_per_site': executed by
+%% `classy_test_site' when the site is created or destroyed. Note:
+%% during execution of these callbacks the site is stopped. </li>
+%% <li>`init_per_node' / `cleanup_per_node': executed by
+%% `classy_test_site' when node of the site is started or stopped.
+%% </li>
+%% </itemize>
+
 -module(classy_test_fixture).
 
 %% API:
