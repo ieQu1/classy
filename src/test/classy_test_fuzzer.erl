@@ -9,6 +9,8 @@
 %% API:
 -export([ format_cmds/1
         , cmds/2
+        , running_sites/1
+        , sites_of_cluster/2
         ]).
 
 %% behavior callbacks:
@@ -30,6 +32,7 @@
 
 -include_lib("proper/include/proper.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("snabbkaffe/include/trace_test.hrl").
 
 %%================================================================================
 %% Type declarations
@@ -93,9 +96,15 @@ setup_hooks(Site) ->
 
 join_node(Origin, Target, Intent) ->
   TargetNode = classy_test_site:which_node(Target),
-  do_join_node(Origin, TargetNode, Intent, 3).
+  ?tp(classy_test_fuzzer_join_node,
+      #{ site => Origin
+       , target => Target
+       , target_node => TargetNode
+       , intent => Intent
+       }),
+  do_join_node(Origin, TargetNode, Intent, 1).
 
-do_join_node(Origin, TargetNode, Intent, Retries) ->
+do_join_node(Origin, TargetNode, Intent, Retry) ->
   Result = classy_test_site:call(
              Origin,
              fun() ->
@@ -104,16 +113,22 @@ do_join_node(Origin, TargetNode, Intent, Retries) ->
   case Result of
     ok ->
       ok;
-    {error, not_in_cluster} when Retries > 0 ->
+    {error, not_in_cluster} when Retry =< 10 ->
       %% Note: we use retries since there's a temporary state
       %% immediately after kick, when node left the old cluster, but
       %% hasn't joined its own "singleton" cluster yet.
-      do_join_node(Origin, TargetNode, Intent, Retries - 1);
+      timer:sleep(Retry * 10),
+      do_join_node(Origin, TargetNode, Intent, Retry + 1);
     Other ->
       Other
   end.
 
 kick_site(Origin, Target, Intent) ->
+  ?tp(classy_test_fuzzer_join_node,
+      #{ site => Origin
+       , target => Target
+       , intent => Intent
+       }),
   classy_test_site:call(
     Origin,
     fun() ->
@@ -145,6 +160,27 @@ cmds(NCommandsFactor, InitState) ->
       ?MODULE,
       initial_state(InitState))).
 
+running_sites(#{sites := Sites}) ->
+  maps:fold(
+    fun(Site, #{running := Running}, Acc) ->
+        case Running of
+          true -> [Site | Acc];
+          false -> Acc
+        end
+    end,
+    [],
+    Sites).
+
+sites_of_cluster(Cluster, #{sites := Sites}) ->
+  maps:fold(
+    fun(Site, #{cluster := C}, Acc) ->
+        if C =:= Cluster -> [Site | Acc];
+           true          -> Acc
+        end
+    end,
+    [],
+    Sites).
+
 %%================================================================================
 %% Proper generators
 %%================================================================================
@@ -165,14 +201,16 @@ running_site_command_(Site, S = #{sites := Sites}) ->
   #{Site := #{cluster := Cluster}} = Sites,
   OtherMembers = sites_of_cluster(Cluster, S) -- [Site],
   frequency(
-    [ {1, {call, ?MODULE, kick_site, [Site, oneof(OtherMembers), kick]}} || length(OtherMembers) > 0] ++
-    [ {1, {call, classy_test_site, stop, [Site]}}
-    , {1, {call, ?MODULE, join_node, [Site, oneof(running_sites(S)), join]}}
+    [ {10, {call, ?MODULE, kick_site, [Site, oneof(OtherMembers), kick]}} || length(OtherMembers) > 0] ++
+    [ {10, {call, classy_test_site, stop, [Site]}}
+    , {10, {call, ?MODULE, join_node, [Site, oneof(running_sites(S)), join]}}
+    | optcall(S, running_site_command, [Site, S], [])
     ]).
 
 stopped_site_command_(Site, S) ->
   frequency(
-    [ {1, {call, classy_test_site, start, [Site]}}
+    [ {10, {call, classy_test_site, start, [Site]}}
+    | optcall(S, running_site_command, [Site, S], [])
     ]).
 
 site_command_(Site, S) ->
@@ -189,9 +227,10 @@ command({init, Conf0}) ->
   ?LET(Conf,
        enrich_test_conf_(Conf0),
        {call, ?MODULE, init_cluster, [Conf]});
-command(S = #{module := CBM, sites := Sites}) ->
-  SiteCmds = [{1, site_command_(Site, S)} || Site <- maps:keys(Sites)],
-  frequency(SiteCmds).
+command(S = #{sites := Sites}) ->
+  SiteCmds = [{10, site_command_(Site, S)} || Site <- maps:keys(Sites)],
+  CustomCmds = optcall(S, general_commands, [S], []),
+  frequency(CustomCmds ++ SiteCmds).
 
 -spec initial_state(test_conf()) -> s().
 initial_state(Conf) ->
@@ -237,20 +276,16 @@ next_state(S, _Ret, {call, ?MODULE, kick_site, [_Origin, Target, _Intent]}) ->
   update_site(
     Target,
     fun(SiteS) -> SiteS#{cluster := NextClusterId} end,
-    S#{cluster_id := NextClusterId + 1}).
+    S#{cluster_id := NextClusterId + 1});
+next_state(S = #{module := Mod}, Ret, Command) ->
+  Mod:next_state(S, Ret, Command).
 
 precondition(_, _) ->
     true.
 
 postcondition(PrevState, Call, Result) ->
   CurrentState = next_state(PrevState, Result, Call),
-  case Call of
-   {call, ?MODULE, join_node, _} ->
-      ?assertMatch(ok, Result);
-    _ ->
-      true
-  end,
-  check_invariants(CurrentState).
+  optcall(CurrentState, postcondition, [CurrentState, Call, Result], true).
 
 %%================================================================================
 %% Internal functions
@@ -266,29 +301,11 @@ is_running(Site, #{sites := Sites}) ->
   #{Site := #{running := Ret}} = Sites,
   Ret.
 
-check_invariants(_CurrentState) ->
-  true.
-
 update_site(Site, Fun, S = #{sites := Sites}) ->
   S#{sites := maps:update_with(Site, Fun, Sites)}.
 
-running_sites(#{sites := Sites}) ->
-  maps:fold(
-    fun(Site, #{running := Running}, Acc) ->
-        case Running of
-          true -> [Site | Acc];
-          false -> Acc
-        end
-    end,
-    [],
-    Sites).
-
-sites_of_cluster(Cluster, #{sites := Sites}) ->
-  maps:fold(
-    fun(Site, #{cluster := C}, Acc) ->
-        if C =:= Cluster -> [Site | Acc];
-           true          -> Acc
-        end
-    end,
-    [],
-    Sites).
+optcall(#{module := Mod}, Fun, Args, Default) ->
+  case erlang:function_exported(Mod, Fun, length(Args)) of
+    true  -> apply(Mod, Fun, Args);
+    false -> Default
+  end.

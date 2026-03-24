@@ -322,6 +322,25 @@ t_999_fuzz(_Config) ->
          ])),
   snabbkaffe:stop().
 
+fuzz_verify(S = #{sites := Sites}) ->
+  ct:sleep(1000),
+  lists:foreach(
+    fun(Site) ->
+        #{Site := #{cluster := Cluster}} = Sites,
+        ExpectedSites = classy_test_fuzzer:sites_of_cluster(Cluster, S),
+        ?retry(
+           1000,
+           10,
+           ?assertSameSet(
+              ExpectedSites,
+              classy_test_site:call(Site, classy, sites, []))),
+        ?assertSameSet(
+           [classy_test_site:which_node(I) || I <- ExpectedSites],
+           classy_test_site:call(Site, classy, nodes, [running]))
+    end,
+    classy_test_fuzzer:running_sites(S)).
+
+
 %%================================================================================
 %% Internal functions
 %%================================================================================
@@ -331,6 +350,13 @@ init_per_suite(Cfg) ->
 
 end_per_suite(Cfg) ->
   Cfg.
+
+general_commands(S) ->
+  [ {1, {call, ?MODULE, fuzz_verify, [S]}}
+  ].
+
+next_state(S, _Ret, {call, ?MODULE, fuzz_verify, _}) ->
+  S.
 
 init_per_testcase(t_999_fuzz, Cfg) ->
   Cfg;
