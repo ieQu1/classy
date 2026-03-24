@@ -127,20 +127,13 @@ init(_) ->
      , nodedown_reason => true
      }),
   classy_table:open(?ptab, #{}),
-  classy_hook:foreach(?on_node_init, []),
   classy:on_membership_change(fun on_membership_change/4, -100),
-  maybe
-    {ok, Cluster} ?= the_cluster(),
-    {ok, Site} ?= the_site(),
-    {ok, _} = classy_sup:ensure_membership(Cluster, Site),
-    S = adjust_run_level(
-          #s{ cluster = Cluster
-            , site = Site
-            }),
-    {ok, S}
-  else
-    _ ->
-      {stop, default_site_not_initialized, undefined}
+  classy_hook:foreach(?on_node_init, []),
+  case init_cluster() of
+    {ok, _} = Ok ->
+      Ok;
+    {error, Reason} ->
+      {stop, Reason, undefined}
   end.
 
 %% @private
@@ -172,7 +165,7 @@ handle_call(Call, From, S) ->
 
 %% @private
 handle_cast(#cast_membership_change{} = Cast, S) ->
-  {noreply, handle_membership_change_event(Cast, S)};
+  handle_membership_change_event(Cast, S);
 handle_cast(Cast, S) ->
   ?tp(warning, classy_unknown_event,
       #{ kind => cast
@@ -195,8 +188,11 @@ handle_info(Info, S) ->
   {noreply, S}.
 
 %% @private
-terminate(_Reason, _S) ->
-  ok.
+terminate(_Reason, S) ->
+  case S of
+    #s{} -> change_run_level(run_level(?stopped), S);
+    _    -> ok
+  end.
 
 %%================================================================================
 %% Internal exports
@@ -236,7 +232,7 @@ handle_membership_change_event(
                          , remote = Remote
                          , member = Member
                          },
-  S = #s{cluster = ThisCluster, site = ThisSite}
+  S0 = #s{cluster = ThisCluster, site = ThisSite}
  ) ->
   ?tp(debug, membership_change,
       #{ cluster => Cluster
@@ -249,15 +245,17 @@ handle_membership_change_event(
      Remote =:= ThisSite,
      Member =:= false ->
       %% We got kicked:
-      erlang:display(we_got_kicked),
       ?tp(warning, classy_kicked_remotely,
           #{ cluster => Cluster
            }),
-      on_leave(S, kicked);
+      case on_leave(S0, kicked) of
+        {ok, S}      -> {noreply, S};
+        {error, Err} -> {stop, Err, undefined}
+      end;
      Cluster =:= ThisCluster ->
-      adjust_run_level(S);
+      {noreply, adjust_run_level(S0)};
      true ->
-      S
+      {noreply, S0}
   end.
 
 handle_kick(Cluster, Local, Target, Intent) ->
@@ -307,8 +305,10 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
       {ok, adjust_run_level(S0)};
     {ok, OldCluster} when OldCluster =/= Cluster ->
       %% Site is currently in a different cluster. Leave it first:
-      case leave_cluster(OldCluster, Local, S0, join) of
-        {ok, S} ->
+      Intent = join,
+      case handle_kick(OldCluster, Local, Local, Intent) of
+        ok ->
+          {ok, S} = on_leave(S0, Intent),
           do_join_node(Node, Cluster, Remote, MemData, S);
         Err ->
           Err
@@ -319,26 +319,37 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
       do_join_node(Node, Cluster, Remote, MemData, S)
   end.
 
-leave_cluster(Cluster, Local, S, Intent) ->
-  case handle_kick(Cluster, Local, Local, Intent) of
-    ok ->
-      {ok, on_leave(S, Intent)};
-    Err ->
-      Err
-  end.
-
 on_leave(S0 = #s{cluster = Cluster, site = Local}, Intent) ->
   S = change_run_level(run_level(?stopped), S0),
   classy_table:delete(?ptab, ?the_cluster),
   classy_hook:foreach(?on_post_kick, [Cluster, Local, Intent]),
-  S#s{ cluster = undefined
-     }.
+  case Intent of
+    join ->
+      {ok, S#s{cluster = undefined}};
+    _ ->
+      init_cluster()
+  end.
 
 join_cluster(Cluster, Local, S = #s{run_level = 0}) ->
   {ok, _} = classy_sup:ensure_membership(Cluster, Local),
   classy_hook:foreach(?on_post_join, [Cluster, Local]),
   set_val(?the_cluster, Cluster),
   {ok, S#s{cluster = Cluster}}.
+
+init_cluster() ->
+  maybe
+    {ok, Cluster} ?= the_cluster(),
+    {ok, Site} ?= the_site(),
+    {ok, _} = classy_sup:ensure_membership(Cluster, Site),
+    S = adjust_run_level(
+          #s{ cluster = Cluster
+            , site = Site
+            }),
+    {ok, S}
+  else
+    _ ->
+      {error, default_site_not_initialized}
+  end.
 
 -spec ensure_value(?the_cluster | ?the_site, ?on_create_cluster | ?on_create_site, binary() | undefined) -> ok.
 ensure_value(Key, OnCreateHook, Default) ->

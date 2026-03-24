@@ -149,7 +149,7 @@ t_kick(Conf) ->
            ?ON(I, classy:sites()))
         || I <- [S2, S3]],
        ?assertEqual(
-          [],
+          [S1],
           ?ON(S1, classy:sites())),
        #{ nodes => [N1, N2, N3]
         , sites => Sites
@@ -193,13 +193,14 @@ t_kick_in_absentia(Conf) ->
        %% It should process the information about getting kicked:
        wait_site_kicked([S1], Cluster1, S1),
        ct:sleep(1000),
-       %% It should not reappear in the sites list:
+       %% It should not rejoin the old cluster:
        [?assertSameSet(
            [S2, S3],
            ?ON(I, classy:sites()))
         || I <- [S2, S3]],
+       %% And it should join its own cluster:
        ?assertEqual(
-          [],
+          [S1],
           ?ON(S1, classy:sites())),
        #{ nodes => [N1, N2, N3]
         , sites => Sites
@@ -289,21 +290,27 @@ t_fuzz(_Config) ->
          proper_statem:more_commands(
            NCommandsFactor,
            proper_statem:commands(
-             classy_fuzzer,
-             classy_fuzzer:initial_state(#{}))),
+             classy_test_fuzzer,
+             classy_fuzzer:initial_state(#{ module => ?MODULE
+                                          , sites => [ {<<"foo">>, #{}}
+                                                     , {<<"bar">>, #{}}
+                                                     ]
+                                          }))),
          #{timetrap => 5_000 * length(Cmds) + 30_000},
          try
            %% Print information about the run:
-           ct:pal("*** Commands:~n~s~n", [classy_fuzzer:format_cmds(Cmds)]),
+           io:format(user, "*** Commands:~n~s~n", [classy_test_fuzzer:format_cmds(Cmds)]),
            %% Initialize the system:
-           classy_fuzzer:cleanup(),
+           classy_test_cluster:start_link(
+             #{ fixtures => classy_test_fixture:defaults(?FUNCTION_NAME)
+              }),
            %% Run test:
-           {_History, State, Result} = proper_statem:run_commands(classy_fuzzer, Cmds),
+           {_History, State, Result} = proper_statem:run_commands(classy_test_fuzzer, Cmds),
            ct:log(info, "*** Model state:~n  ~p~n", [State]),
            ct:log("*** Result:~n  ~p~n", [Result]),
            Result =:= ok orelse error({invalid_result, Result})
          after
-           ok = classy_fuzzer:cleanup()
+           ok = classy_test_cluster:stop(normal)
          end,
          [
          ])),
@@ -320,6 +327,8 @@ init_per_suite(Cfg) ->
 end_per_suite(Cfg) ->
   Cfg.
 
+init_per_testcase(t_fuzz, Cfg) ->
+  Cfg;
 init_per_testcase(TC, Cfg) ->
   Fixtures = [ {classy_test_snabbkaffe, #{}}
              ],
