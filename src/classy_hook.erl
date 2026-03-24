@@ -46,14 +46,14 @@ init() ->
         ?tp(classy_on_node_init,
             #{ node => node()
              }),
-        classy_node:maybe_init_the_site(undefined, undefined)
+        classy_node:maybe_init_the_site(undefined)
     end,
     -100),
   classy:post_kick(
     fun(_OldCluster, Local, Intent) ->
         %% Re-initialize the local cluster upon getting kicked:
         Intent =/= join andalso
-          classy_node:maybe_init_the_site(undefined, Local)
+          classy_node:maybe_init_the_site(Local)
     end,
     -100),
   %% Info logging:

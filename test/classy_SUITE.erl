@@ -18,7 +18,7 @@
 %% Tests
 %%================================================================================
 
-t_cluster(_Conf) ->
+t_010_cluster(_Conf) ->
   ?check_trace(
      #{timetrap => 15_000},
      begin
@@ -51,7 +51,7 @@ t_cluster(_Conf) ->
      []).
 
 %% This testcase verifies happy case of joining one node to another:
-t_join(Conf) ->
+t_020_join(Conf) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   ?check_trace(
@@ -117,7 +117,7 @@ t_join(Conf) ->
      ]).
 
 %% This testcase verifies happy case of kicking node from the cluster:
-t_kick(Conf) ->
+t_030_kick(Conf) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
@@ -141,7 +141,10 @@ t_kick(Conf) ->
            ?ON(I, classy:sites()))
         || I <- Sites],
        %% Kick N1 from the cluster from N3:
+       {ok, SubRef} = snabbkaffe:subscribe(?match_event(#{?snk_kind := classy_init_clustering})),
        ?assertMatch(ok, ?ON(S3, classy:kick_node(N1, force))),
+       %% Wait for completion of the operation:
+       {ok, _} = snabbkaffe:receive_events(SubRef),
        wait_site_kicked(Sites, Cluster1, S1),
        %% Verify state:
        [?assertSameSet(
@@ -160,7 +163,7 @@ t_kick(Conf) ->
      ]).
 
 %% Verify that node can be kicked from the cluster while down:
-t_kick_in_absentia(Conf) ->
+t_040_kick_in_absentia(Conf) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
@@ -188,17 +191,22 @@ t_kick_in_absentia(Conf) ->
            [S2, S3],
            ?ON(I, classy:sites()))
         || I <- [S2, S3]],
-       %% Bring S1 back up:
+       %% Bring S1 back up.
+       %%   Upon realization that it got kicked, it should create a fresh cluster:
+       {ok, SubRef} = snabbkaffe:subscribe(?match_event(#{ ?snk_kind := classy_init_clustering
+                                                         , site := S1
+                                                         , cluster := C
+                                                         } when C =/= Cluster1)),
        ok = classy_test_site:start(S1),
        %% It should process the information about getting kicked:
        wait_site_kicked([S1], Cluster1, S1),
-       ct:sleep(1000),
+       {ok, _} = snabbkaffe:receive_events(SubRef),
        %% It should not rejoin the old cluster:
        [?assertSameSet(
            [S2, S3],
            ?ON(I, classy:sites()))
         || I <- [S2, S3]],
-       %% And it should join its own cluster:
+       %% It should forma a new singleton cluster instead:
        ?assertEqual(
           [S1],
           ?ON(S1, classy:sites())),
@@ -218,7 +226,7 @@ t_kick_in_absentia(Conf) ->
      ]).
 
 %% Verify that join and kick can be forbidden via hooks:
-t_pre_checks(Conf) ->
+t_050_pre_checks(Conf) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   Sites = [S1, S2],
@@ -265,7 +273,7 @@ t_pre_checks(Conf) ->
      end,
      []).
 
-t_fuzz(_Config) ->
+t_999_fuzz(_Config) ->
   %% NOTE: we set timeout at the lowest level to capture the trace
   %% and have a nicer error message.
   %%
@@ -399,6 +407,6 @@ initialization_hooks(RuntimeData, Trace) ->
 setup_hooks(Site) ->
   classy:on_node_init(
     fun() ->
-        classy_node:maybe_init_the_site(undefined, Site)
+        classy_node:maybe_init_the_site(Site)
     end,
     0).

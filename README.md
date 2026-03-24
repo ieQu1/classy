@@ -100,7 +100,7 @@ Business applications can override this behavior by registering `on_node_init` h
 ```
 classy:on_node_init(
   fun() ->
-      classy_node:maybe_init_the_site(ClusterId, SiteId)
+      classy_node:maybe_init_the_site(SiteId)
   end,
   0)
 ```

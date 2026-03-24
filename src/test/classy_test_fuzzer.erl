@@ -20,7 +20,7 @@
 
 %% internal exports:
 -export([ init_cluster/1
-        , setup_hooks/2
+        , setup_hooks/1
         , join_node/3
         , kick_site/3
         ]).
@@ -54,6 +54,8 @@
          , sites := site_state()
          , quorum := pos_integer()
          , n_sites := pos_integer()
+           %% Symbolic ID of the cluster (it's not equal to the actual cluster ID, which is random)
+         , cluster_id := pos_integer()
          , _ => _
          }.
 
@@ -68,7 +70,7 @@ init_cluster(#{sites := Sites, quorum := Quorum, n_sites := NSites}) ->
         Fixtures = maps:get(fixtures, Conf0, []),
         ClassyFixture = {classy_test_app,
                          #{ app => classy
-                          , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site, Site]}
+                          , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
                                     , quorum => Quorum
                                     , n_sites => NSites
                                     , sync_timeout => 10
@@ -81,18 +83,12 @@ init_cluster(#{sites := Sites, quorum := Quorum, n_sites := NSites}) ->
     end,
     Sites).
 
-setup_hooks(Cluster, Site) ->
+setup_hooks(Site) ->
   classy:on_node_init(
     fun() ->
-        classy_node:maybe_init_the_site(Cluster, Site)
+        classy_node:maybe_init_the_site(Site)
     end,
-    0),
-  classy:post_kick(
-    fun(_OldCluster, Local, Intent) ->
-        Intent =/= join andalso
-          classy_node:maybe_init_the_site(Local, Local)
-    end,
-    -100).
+    0).
 
 join_node(Origin, Target, Intent) ->
   TargetNode = classy_test_site:which_node(Target),
@@ -196,15 +192,21 @@ initial_state(Conf) ->
 %% Initial connection:
 next_state(_, _Ret, {call, ?MODULE, init_cluster, [TestConf]}) ->
   #{sites := Sites0} = TestConf,
-  Sites = maps:from_list(
-            [ { Site
-              , #{ cluster => Site
-                 , running => false
-                 , conf    => Conf
-                 }
-              }
-            || {Site, Conf} <- Sites0]),
-  TestConf#{ sites := Sites
+  {Sites, NextClusterId} =
+    lists:mapfoldl(
+      fun({Site, Conf}, Acc) ->
+          Elem = { Site
+                 , #{ cluster => Acc
+                    , running => false
+                    , conf    => Conf
+                    }
+                 },
+          {Elem, Acc + 1}
+      end,
+      0,
+      Sites0),
+  TestConf#{ sites      := maps:from_list(Sites)
+           , cluster_id => NextClusterId
            };
 next_state(S, _Ret, {call, classy_test_site, start, [Site]}) ->
   update_site(
@@ -223,10 +225,11 @@ next_state(S = #{sites := Sites}, _Ret, {call, ?MODULE, join_node, [Origin, Targ
     fun(SState) -> SState#{cluster := Cluster} end,
     S);
 next_state(S, _Ret, {call, ?MODULE, kick_site, [_Origin, Target, _Intent]}) ->
+  #{cluster_id := NextClusterId} = S,
   update_site(
     Target,
-    fun(SState) -> SState#{cluster := Target} end,
-    S).
+    fun(SState) -> SState#{cluster := NextClusterId} end,
+    S#{cluster_id := NextClusterId + 1}).
 
 precondition(_, _) ->
     true.

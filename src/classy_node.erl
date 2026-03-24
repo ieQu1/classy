@@ -7,7 +7,7 @@
 
 %% API:
 -export([ start_link/0
-        , maybe_init_the_site/2
+        , maybe_init_the_site/1
         , join_node/2
         , kick_site/2
         , the_site/0
@@ -59,10 +59,10 @@
 %%
 %% Values that are not persistently stored are set to the given values.
 %% Any `undefined' argument is replaced with a sufficiently unique random string.
--spec maybe_init_the_site(classy:cluster_id() | undefined, classy:site() | undefined) -> ok.
-maybe_init_the_site(MaybeCluster, MaybeSite) ->
+-spec maybe_init_the_site(classy:site() | undefined) -> ok.
+maybe_init_the_site(MaybeSite) ->
   ensure_value(?the_site, ?on_create_site, MaybeSite),
-  ensure_value(?the_cluster, ?on_create_cluster, MaybeCluster).
+  ensure_value(?the_cluster, ?on_create_cluster, undefined).
 
 %% @private
 -spec start_link() -> {ok, pid()}.
@@ -345,6 +345,7 @@ init_cluster() ->
           #s{ cluster = Cluster
             , site = Site
             }),
+    ?tp(debug, classy_init_clustering, #{site => Site, cluster => Cluster}),
     {ok, S}
   else
     _ ->
