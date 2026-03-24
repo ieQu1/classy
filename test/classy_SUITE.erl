@@ -295,15 +295,13 @@ t_999_fuzz(_Config) ->
       },
       ?forall_trace(
          Cmds,
-         proper_statem:more_commands(
+         classy_test_fuzzer:cmds(
            NCommandsFactor,
-           proper_statem:commands(
-             classy_test_fuzzer,
-             classy_fuzzer:initial_state(#{ module => ?MODULE
-                                          , sites => [ {<<"foo">>, #{}}
-                                                     , {<<"bar">>, #{}}
-                                                     ]
-                                          }))),
+           #{ module => ?MODULE
+            , sites => [ {<<"foo">>, #{}}
+                       , {<<"bar">>, #{}}
+                       ]
+            }),
          #{timetrap => 5_000 * length(Cmds) + 30_000},
          try
            %% Print information about the run:
@@ -329,13 +327,12 @@ t_999_fuzz(_Config) ->
 %%================================================================================
 
 init_per_suite(Cfg) ->
-  classy_ct:create_table(),
   Cfg.
 
 end_per_suite(Cfg) ->
   Cfg.
 
-init_per_testcase(t_fuzz, Cfg) ->
+init_per_testcase(t_999_fuzz, Cfg) ->
   Cfg;
 init_per_testcase(TC, Cfg) ->
   Fixtures = [ {classy_test_snabbkaffe, #{}}
@@ -356,12 +353,15 @@ create_start_site(Site, CustomConf) ->
   classy_test_site:which_node(Site).
 
 end_per_testcase(_TC, Cfg) ->
-  ct:pal("EXIT ~p", [Cfg]),
-  classy_test_cluster:stop(normal),
+  Reason = case proplists:get_value(tc_status, Cfg) of
+             ok -> normal;
+             _  -> failed
+           end,
+  classy_test_cluster:stop(Reason),
   snabbkaffe:stop().
 
 all() ->
-  classy_ct:all(?MODULE).
+  [t_010_cluster, t_020_join, t_030_kick, t_040_kick_in_absentia, t_999_fuzz].
 
 wait_site_joined(WaitOnSites, Cluster, Site) ->
   lists:foreach(

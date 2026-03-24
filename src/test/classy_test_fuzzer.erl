@@ -8,6 +8,7 @@
 
 %% API:
 -export([ format_cmds/1
+        , cmds/2
         ]).
 
 %% behavior callbacks:
@@ -63,7 +64,7 @@
 %% Internal exports
 %%================================================================================
 
--spec init_cluster(s()) -> ok.
+-spec init_cluster(test_conf()) -> ok.
 init_cluster(#{sites := Sites, quorum := Quorum, n_sites := NSites}) ->
   lists:foreach(
     fun({Site, Conf0}) ->
@@ -136,6 +137,13 @@ format_cmds(Cmds) ->
         io_lib:format(" *** other(~p)~n", [Other])
     end,
     Cmds).
+
+cmds(NCommandsFactor, InitState) ->
+  proper_statem:more_commands(
+    NCommandsFactor,
+    proper_statem:commands(
+      ?MODULE,
+      initial_state(InitState))).
 
 %%================================================================================
 %% Proper generators
@@ -211,24 +219,24 @@ next_state(_, _Ret, {call, ?MODULE, init_cluster, [TestConf]}) ->
 next_state(S, _Ret, {call, classy_test_site, start, [Site]}) ->
   update_site(
     Site,
-    fun(SState) -> SState#{running := true} end,
+    fun(SiteS) -> SiteS#{running := true} end,
     S);
 next_state(S, _Ret, {call, classy_test_site, stop, [Site]}) ->
   update_site(
     Site,
-    fun(SState) -> SState#{running := false} end,
+    fun(SiteS) -> SiteS#{running := false} end,
     S);
 next_state(S = #{sites := Sites}, _Ret, {call, ?MODULE, join_node, [Origin, Target, _Intent]}) ->
   #{Target := #{cluster := Cluster}} = Sites,
   update_site(
     Origin,
-    fun(SState) -> SState#{cluster := Cluster} end,
+    fun(SiteS) -> SiteS#{cluster := Cluster} end,
     S);
 next_state(S, _Ret, {call, ?MODULE, kick_site, [_Origin, Target, _Intent]}) ->
   #{cluster_id := NextClusterId} = S,
   update_site(
     Target,
-    fun(SState) -> SState#{cluster := NextClusterId} end,
+    fun(SiteS) -> SiteS#{cluster := NextClusterId} end,
     S#{cluster_id := NextClusterId + 1}).
 
 precondition(_, _) ->

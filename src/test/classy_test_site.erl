@@ -14,7 +14,9 @@
         , stop/1
 
         , call/2
+        , call/3
         , call/4
+        , call/5
         ]).
 
 %% behavior callbacks:
@@ -26,7 +28,7 @@
 
 -export_type([conf/0]).
 
--include_lib("common_test/include/ct.hrl").
+-include_lib("snabbkaffe/include/trace_test.hrl").
 
 %%================================================================================
 %% Type declarations
@@ -97,18 +99,28 @@ stop(Site) ->
 %% Site must be running.
 -spec call(classy:site(), module(), atom(), list()) -> _.
 call(Site, Module, Function, Args) ->
+  call(Site, Module, Function, Args, 5_000).
+
+%% @doc Execute MFA on the site.
+%% Site must be running.
+-spec call(classy:site(), module(), atom(), list(), timeout()) -> _.
+call(Site, Module, Function, Args, Timeout) ->
   case call_method(Site) of
     {erpc, Node} ->
-      erpc:call(Node, Module, Function, Args)
+      erpc:call(Node, Module, Function, Args, Timeout)
   end.
+
+-spec call(classy:site(), fun(() -> Ret)) -> Ret.
+call(Site, Fun) ->
+  call(Site, Fun, 5_000).
 
 %% @doc Execute `Fun' on the site.
 %% Site must be running.
--spec call(classy:site(), fun(() -> Ret)) -> Ret.
-call(Site, Fun) ->
+-spec call(classy:site(), fun(() -> Ret), timeout()) -> Ret.
+call(Site, Fun, Timeout) ->
   case call_method(Site) of
     {erpc, Node} ->
-      erpc:call(Node, Fun)
+      erpc:call(Node, Fun, Timeout)
   end.
 
 %%================================================================================
@@ -150,6 +162,7 @@ init([CommonSpec, FixtureState0, Site, CustomSiteSpec]) ->
                , DefaultSiteSpec
                , CustomSiteSpec
                ]),
+  ?tp(debug, classy_test_site_init, SiteSpec),
   #{fixtures := Fixtures} = SiteSpec,
   case classy_test_fixture:init_per_site(Fixtures, Site, FixtureState0) of
     {ok, FixtureState} ->
@@ -204,7 +217,8 @@ terminate(Reason, S0 = #s{site = Site, spec = Spec, fixture_state = FS}) ->
   _ = do_stop(S0),
   Success = classy_test_fixture:exit_reason_to_success(Reason),
   #{fixtures := Fixtures} = Spec,
-  classy_test_fixture:cleanup_per_site(Fixtures, Site, Success, FS);
+  classy_test_fixture:cleanup_per_site(Fixtures, Site, Success, FS),
+  ?tp(classy_test_site_destroyed, #{site => Site});
 terminate(_Reason, _) ->
   ok.
 
@@ -234,7 +248,7 @@ do_start(Name, S0) ->
       StartArgs = Peer#{ name => Name
                        , args => Args0 ++ Args
                        },
-      logger:info("Starting site ~s ~p", [Site, StartArgs]),
+      ?tp(debug, classy_test_site_start, #{site => Site}),
       {ok, Pid, Node} = peer:start(StartArgs),
       S = S0#s{ name = Name
               , pid = Pid
@@ -262,6 +276,7 @@ do_stop(S) ->
     , node = Node
     , node_fixture_state = NFS
     } = S,
+  ?tp(debug, classy_test_site_stop, #{site => Site}),
   is_map(NFS) andalso
     classy_test_fixture:cleanup_per_node(Fixtures, Site, Node, NFS),
   persistent_term:erase(?call_via(Site)),

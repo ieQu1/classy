@@ -125,7 +125,7 @@ init({top, Conf}) ->
                     , type => worker
                     , restart => permanent
                     , start => {?MODULE, start_link_cleanup, [Fixtures, FixtureState]}
-                    , shutdown => 30_000
+                    , shutdown => 5_000
                     }
                  , #{ id => sites
                     , type => supervisor
@@ -148,7 +148,7 @@ init({sites, CommonConf, FixtureState}) ->
               , type     => worker
               , start    => {classy_test_site, start_link, [CommonConf, FixtureState]}
               , shutdown => 5_000
-              , restart  => temporary
+              , restart  => permanent
               },
   {ok, {SupFlags, [Children]}}.
 
