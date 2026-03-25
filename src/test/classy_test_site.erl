@@ -29,7 +29,6 @@
 -export_type([conf/0]).
 
 -include("classy_internal.hrl").
--include_lib("snabbkaffe/include/trace_test.hrl").
 
 %%================================================================================
 %% Type declarations

@@ -34,6 +34,16 @@
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("snabbkaffe/include/trace_test.hrl").
 
+-dialyzer({nowarn_function,
+           [ cmds/2
+           , command/1
+           , running_site_command_/2
+           , stopped_site_command_/2
+           , enrich_test_conf_/1
+           , site_command_/2
+           , maybe_generate/3
+           ]}).
+
 %%================================================================================
 %% Type declarations
 %%================================================================================
@@ -232,7 +242,7 @@ command(S = #{sites := Sites}) ->
   CustomCmds = optcall(S, general_commands, [S], []),
   frequency(CustomCmds ++ SiteCmds).
 
--spec initial_state(test_conf()) -> s().
+-spec initial_state(test_conf()) -> {init, test_conf()}.
 initial_state(Conf) ->
   {init, Conf}.
 
