@@ -98,6 +98,32 @@ smoke_snapshot_test() ->
     cleanup(Clean)
   end.
 
+%% This test verifies table clear operation
+clear_test() ->
+  Clean = setup(?FUNCTION_NAME),
+  try
+    %% Insert data:
+    ?assertEqual(ok, classy_table:open(t, #{})),
+    [?assertEqual(ok, classy_table:dirty_write(t, N, N)) || N <- lists:seq(1, 100)],
+    [?assertEqual(ok, classy_table:write(t, N, N)) || N <- lists:seq(101, 110)],
+    ?assertEqual(
+       ok,
+       classy_table:clear(t)),
+    ?assertEqual(
+       [],
+       ets:match(t, '$1')),
+    %% Checkpoint and reopen table:
+    ?assertEqual(ok, classy_table:stop(t, infinity)),
+    ?assertEqual(ok, classy_table:open(t, #{})),
+    %% Verify restored data:
+    ?assertEqual(
+       [],
+       ets:match(t, '$1'))
+  after
+    classy_table:drop(t),
+    cleanup(Clean)
+  end.
+
 %%================================================================================
 %% Helper functions
 %%================================================================================

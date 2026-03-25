@@ -16,6 +16,7 @@
 %% API:
 -export([ open/2
         , stop/2
+        , clear/1
         , drop/1
         , write/3
         , dirty_write/3
@@ -67,6 +68,7 @@
 -record(call_flush, {}).
 -record(call_force_compaction, {}).
 -record(call_drop, {}).
+-record(call_clear, {}).
 
 -define(w(K, V), {w, K, V}).
 -define(d(K), {d, K}).
@@ -148,6 +150,11 @@ drop(Tab) ->
 lookup(Tab, Key) ->
   [V || #classy_kv{v = V} <- ets:lookup(Tab, Key)].
 
+%% @doc Delete all data in the table.
+-spec clear(tab()) -> ok.
+clear(Tab) ->
+  gen_server:call(?via(Tab), #call_clear{}, infinity).
+
 %%================================================================================
 %% Internal exports
 %%================================================================================
@@ -207,6 +214,14 @@ handle_call(#call_force_compaction{}, From, S0) ->
       gen_server:reply(From, {error, Reason}),
       {stop, compaction_failed, S}
   end;
+handle_call(#call_clear{}, From, S0 = #s{ets = Ets}) ->
+  S = do_clear(
+        S0,
+        ets:match(
+          Ets,
+          #classy_kv{k = '$1', _ = '_'},
+          batch_size())),
+  maybe_compact(From, ok, handle_flush(S));
 handle_call(#call_drop{}, From, S) ->
   {stop, normal, handle_drop(From, S)};
 handle_call(Call, From, S) ->
@@ -385,6 +400,19 @@ dump_ets(Log, N, {Batch, Cont}) ->
     Log,
     N + length(Recs),
     ets:match(Cont)).
+
+do_clear(S, '$end_of_table') ->
+  S;
+do_clear(S0, {Keys, Cont}) ->
+  S = lists:foldl(
+        fun([K], Acc) ->
+            handle_delete(
+              #call_delete{k = K, wal = true},
+              Acc)
+        end,
+        S0,
+        Keys),
+  do_clear(S, ets:match(Cont)).
 
 handle_drop(From, S = #s{ets = Ets, log = Log}) ->
   ets:delete(Ets),
