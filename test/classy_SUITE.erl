@@ -273,6 +273,34 @@ t_050_pre_checks(Conf) ->
      end,
      []).
 
+t_060_at_lower_level(_Config) ->
+  S1 = <<"s1">>,
+  ?check_trace(
+     begin
+       %% Prepare the system:
+       N1 = create_start_site(S1, #{}),
+       timer:sleep(1000),
+       ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
+       ?assertMatch(
+          {ok, hello},
+          ?ON(S1,
+              classy:at_lower_level(
+                single,
+                fun() ->
+                    hello
+                end)))
+     end,
+     [ {"run level transitions",
+        fun(Trace) ->
+            ?assertEqual(
+               [ single, cluster, quorum
+               , cluster, single
+               , cluster, quorum
+               ],
+               ?projection(to, ?of_kind(classy_change_run_level, Trace)))
+        end}
+     ]).
+
 t_999_fuzz(_Config) ->
   %% NOTE: we set timeout at the lowest level to capture the trace
   %% and have a nicer error message.
@@ -339,7 +367,6 @@ fuzz_verify(S = #{sites := Sites}) ->
            classy_test_site:call(Site, classy, nodes, [running]))
     end,
     classy_test_fuzzer:running_sites(S)).
-
 
 %%================================================================================
 %% Internal functions

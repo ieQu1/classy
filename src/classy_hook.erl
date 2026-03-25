@@ -105,7 +105,7 @@ init() ->
     100),
   classy:run_level(
     fun(From, To) ->
-        ?tp(notice, classy_change_run_level,
+        ?tp(info, classy_change_run_level,
             #{ from => From
              , to => To
              })

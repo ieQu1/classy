@@ -12,6 +12,8 @@
         , kick_site/2
         , the_site/0
         , the_cluster/0
+
+        , at_lower_level/2
         ]).
 
 %% behavior callbacks:
@@ -20,7 +22,7 @@
 %% internal exports:
 -export([hello/0]).
 
--export_type([]).
+-export_type([run_level_atom/0]).
 
 -include_lib("snabbkaffe/include/trace.hrl").
 -include("classy_internal.hrl").
@@ -42,6 +44,10 @@
         , local :: classy:site()
         , remote :: classy:site()
         , member :: boolean()
+        }).
+-record(call_at_run_level,
+        { level :: run_level_atom()
+        , function :: fun(() -> _)
         }).
 
 -define(node_tab, classy_node_status_tab).
@@ -106,6 +112,16 @@ kick_site(Site, Intent) ->
     #call_kick{site = Site, intent = Intent},
     infinity).
 
+%% @doc Lower the run level to the given value and run the specified function.
+-spec at_lower_level(run_level_atom(), fun(() -> Ret)) ->
+        {ok, Ret} |
+        {error | exit | throw, _Reason, _Stacktrace}.
+at_lower_level(RunLevel, Fun) ->
+  gen_server:call(
+    ?SERVER,
+    #call_at_run_level{level = RunLevel, function = Fun},
+    infinity).
+
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
@@ -154,6 +170,16 @@ handle_call(#call_kick{site = Target, intent = Intent}, _From, S) ->
       _ -> {error, local_not_in_cluster}
     end,
   {reply, Ret, S};
+handle_call(#call_at_run_level{level = RequestedRunLevel, function = Fun}, _From, S0) ->
+  RunLevel = min(S0#s.run_level, run_level(RequestedRunLevel)),
+  S = change_run_level(RunLevel, S0),
+  Ret = try
+          {ok, Fun()}
+        catch
+          EC:Err:Stack ->
+            {EC, Err, Stack}
+        end,
+  {reply, Ret, adjust_run_level(S)};
 handle_call(Call, From, S) ->
   ?tp(warning, classy_unknown_event,
       #{ kind => call
@@ -367,7 +393,6 @@ ensure_value(Key, OnCreateHook, Default) ->
       classy_hook:foreach(OnCreateHook, [Val]),
       set_val(Key, Val)
   end.
-
 
 set_val(Key, Val) when is_binary(Val), Key =/= ?the_site orelse Key =/= ?the_cluster ->
   classy_table:write(?ptab, Key, Val).

@@ -10,6 +10,7 @@
         , sites/0
         , nodes/1
         , quorum/1
+        , at_lower_level/2
         ]).
 
 -export([ on_node_init/2
@@ -134,6 +135,16 @@ nodes(all) ->
     _ ->
       []
   end.
+
+%% @doc Lower the run level to the given value and run the specified function.
+%%
+%% This function can be used to implement migrations that require
+%% business applications be stopped.
+-spec at_lower_level(classy_node:run_level_atom(), fun(() -> Ret)) ->
+        {ok, Ret} |
+        {error | exit | throw, _Reason, _Stacktrace}.
+at_lower_level(RunLevel, Fun) ->
+  classy_node:at_lower_level(RunLevel, Fun).
 
 %%--------------------------------------------------------------------------------
 %% Misc.
