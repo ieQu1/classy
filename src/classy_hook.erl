@@ -50,7 +50,12 @@ init() ->
     end,
     -100),
   classy:post_kick(
-    fun(_OldCluster, Local, Intent) ->
+    fun(OldCluster, Local, Intent) ->
+        ?tp(info, classy_kicked_from_cluster,
+            #{ old_cluster => OldCluster
+             , local => Local
+             , intent => Intent
+             }),
         %% Re-initialize the local cluster upon getting kicked:
         Intent =/= join andalso
           classy_node:maybe_init_the_site(Local)
@@ -60,14 +65,15 @@ init() ->
   classy:on_create_site(
     fun(Site) ->
         ?tp(info, classy_create_new_site,
-            #{ site => Site
+            #{ local => Site
              })
     end,
     100),
   classy:on_create_cluster(
-    fun(Cluster) ->
+    fun(Cluster, Site) ->
         ?tp(info, classy_create_new_cluster,
             #{ cluster => Cluster
+             , local => Site
              }),
         ok
     end,
@@ -87,19 +93,20 @@ init() ->
     fun(Cluster, Local) ->
         ?tp(notice, classy_joined_cluster,
             #{ cluster => Cluster
-             , local_site => Local
+             , local => Local
              })
     end,
     -100),
   classy:on_membership_change(
-    fun(Cluster, _Local, Remote, Member) ->
+    fun(Cluster, Local, Remote, Member) ->
         Kind = case Member of
                  true -> classy_member_join;
                  false -> classy_member_leave
                end,
         ?tp(notice, Kind,
             #{ cluster => Cluster
-             , site => Remote
+             , site => Local
+             , remote => Remote
              })
     end,
     100),

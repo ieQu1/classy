@@ -50,6 +50,7 @@ t_010_cluster(_Conf) ->
        ?assertMatch(ok, classy_test_site:stop(<<"foo">>))
      end,
      [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
      ]).
 
 %% This testcase verifies happy case of joining one node to another:
@@ -116,6 +117,7 @@ t_020_join(Conf) ->
                   #{?snk_kind := classy_joined_cluster, cluster := C},
                   Trace))
         end}
+     , fun events_on_all_sites/1
      ]).
 
 %% This testcase verifies happy case of kicking node from the cluster:
@@ -125,6 +127,7 @@ t_030_kick(Conf) ->
   S3 = <<"s3">>,
   Sites = [S1, S2, S3],
   ?check_trace(
+     #{timetrap => 20_000},
      begin
        %% Prepare the system:
        N1 = create_start_site(S1, #{}),
@@ -162,6 +165,7 @@ t_030_kick(Conf) ->
         }
      end,
      [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
      ]).
 
 %% Verify that node can be kicked from the cluster while down:
@@ -171,6 +175,7 @@ t_040_kick_in_absentia(Conf) ->
   S3 = <<"s3">>,
   Sites = [S1, S2, S3],
   ?check_trace(
+     #{timetrap => 20_000},
      begin
        %% Prepare the system:
        N1 = create_start_site(S1, #{}),
@@ -196,7 +201,7 @@ t_040_kick_in_absentia(Conf) ->
        %% Bring S1 back up.
        %%   Upon realization that it got kicked, it should create a fresh cluster:
        {ok, SubRef} = snabbkaffe:subscribe(?match_event(#{ ?snk_kind := classy_init_clustering
-                                                         , site := S1
+                                                         , local := S1
                                                          , cluster := C
                                                          } when C =/= Cluster1)),
        ok = classy_test_site:start(S1),
@@ -226,14 +231,16 @@ t_040_kick_in_absentia(Conf) ->
                           } <- Trace])
         end}
      , fun no_unexpected_events/1
+     , fun events_on_all_sites/1
      ]).
 
 %% Verify that join and kick can be forbidden via hooks:
-t_050_pre_checks(Conf) ->
+t_050_pre_checks(_Conf) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   Sites = [S1, S2],
   ?check_trace(
+     #{timetrap => 20_000},
      begin
        %% Prepare the system:
        N1 = create_start_site(S1, #{}),
@@ -275,11 +282,13 @@ t_050_pre_checks(Conf) ->
           ?ON(S2, classy:kick_node(N1, force)))
      end,
      [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
      ]).
 
 t_060_at_lower_level(_Config) ->
   S1 = <<"s1">>,
   ?check_trace(
+     #{timetrap => 20_000},
      begin
        %% Prepare the system:
        N1 = create_start_site(S1, #{}),
@@ -304,6 +313,7 @@ t_060_at_lower_level(_Config) ->
                ?projection(to, ?of_kind(classy_change_run_level, Trace)))
         end}
      , fun no_unexpected_events/1
+     , fun events_on_all_sites/1
      ]).
 
 t_999_fuzz(_Config) ->
@@ -352,6 +362,7 @@ t_999_fuzz(_Config) ->
            ok = classy_test_cluster:stop(normal)
          end,
          [ fun no_unexpected_events/1
+         , fun events_on_all_sites/1
          ])),
   snabbkaffe:stop().
 
@@ -383,6 +394,96 @@ no_unexpected_events(Trace) ->
      ?of_kind(
         [?classy_unknown_event, ?classy_abnormal_exit],
         Trace)).
+
+events_on_all_sites(Trace) ->
+  Sites = ?projection(local, ?of_kind(classy_create_new_site, Trace)),
+  lists:foreach(
+    fun(Site) ->
+        ?assertMatch(
+           {_, _},
+           site_events(Site, Trace))
+    end,
+    Sites).
+
+%% Verify sequence of site events, return the last event and the number of site events
+site_events(Site, Trace) ->
+  lists:foldl(
+    fun(Event, {NEvents, PrevEvent}) ->
+        case site_of_event(Event) of
+          Site ->
+            {NEvents + 1, validate_site_event(PrevEvent, Event)};
+          _ ->
+            {NEvents, PrevEvent}
+        end
+    end,
+    {0, undefined},
+    Trace).
+
+%%    Ignore the following events:
+validate_site_event(Prev, #{?snk_kind := Kind}) when
+    Kind =:= classy_member_join;
+    Kind =:= classy_member_leave;
+    Kind =:= classy_init_clustering ->
+  Prev;
+%%    Site creation:
+validate_site_event(undefined,
+                    #{?snk_kind := classy_create_new_site} = E) ->
+  E;
+validate_site_event(#{?snk_kind := classy_create_new_site},
+                    #{?snk_kind := classy_change_run_level, to := single} = E) ->
+  E;
+validate_site_event(#{?snk_kind := classy_create_new_site},
+                    #{?snk_kind := classy_create_new_cluster} = E) ->
+  E;
+%%    Run level changes:
+validate_site_event(#{?snk_kind := classy_change_run_level, to := stopped},
+                    #{?snk_kind := classy_change_run_level, to := single} = E) ->
+  E;
+validate_site_event(#{?snk_kind := classy_change_run_level, to := single},
+                    #{?snk_kind := classy_change_run_level, to := cluster} = E) ->
+  E;
+validate_site_event(#{?snk_kind := classy_change_run_level, to := cluster},
+                    #{?snk_kind := classy_change_run_level, to := quorum} = E) ->
+  E;
+validate_site_event(#{?snk_kind := classy_change_run_level, to := quorum},
+                    #{?snk_kind := classy_change_run_level, to := cluster} = E) ->
+  E;
+validate_site_event(#{?snk_kind := classy_change_run_level, to := cluster},
+                    #{?snk_kind := classy_change_run_level, to := single} = E) ->
+  E;
+validate_site_event(#{?snk_kind := classy_change_run_level, to := single},
+                    #{?snk_kind := classy_change_run_level, to := stopped} = E) ->
+  E;
+%%   Change of the cluster:
+validate_site_event(#{?snk_kind := classy_change_run_level, to := stopped},
+                    #{?snk_kind := classy_kicked_from_cluster} = E) ->
+  E;
+validate_site_event(#{?snk_kind := classy_kicked_from_cluster},
+                    #{?snk_kind := classy_joined_cluster} = E) ->
+  E;
+validate_site_event(#{?snk_kind := classy_kicked_from_cluster},
+                    #{?snk_kind := classy_create_new_cluster} = E) ->
+  E;
+validate_site_event(#{?snk_kind := classy_joined_cluster},
+                    #{?snk_kind := classy_change_run_level, to := single} = E) ->
+  E;
+validate_site_event(#{?snk_kind := classy_create_new_cluster},
+                    #{?snk_kind := classy_change_run_level, to := single} = E) ->
+  E.
+
+site_of_event(#{?snk_kind := Kind, local := Site}) when
+    Kind =:= classy_create_new_site;
+    Kind =:= classy_create_new_cluster;
+    Kind =:= classy_member_join;
+    Kind =:= classy_member_leave;
+    Kind =:= classy_joined_cluster;
+    Kind =:= classy_kicked_from_cluster;
+    Kind =:= classy_init_clustering ->
+  Site;
+site_of_event(#{?snk_kind := classy_change_run_level, ?snk_meta := #{local := Site}}) ->
+  Site;
+site_of_event(_) ->
+  undefined.
 
 %%================================================================================
 %% Internal functions
@@ -430,7 +531,7 @@ end_per_testcase(_TC, Cfg) ->
   snabbkaffe:stop().
 
 all() ->
-  [t_010_cluster, t_020_join, t_030_kick, t_040_kick_in_absentia, t_999_fuzz].
+  [I || {I, 1} <- module_info(exports), I > 't_', I < 't`'].
 
 wait_site_joined(WaitOnSites, Cluster, Site) ->
   lists:foreach(
@@ -439,7 +540,7 @@ wait_site_joined(WaitOnSites, Cluster, Site) ->
         ?block_until(
            #{ ?snk_kind := classy_member_join
             , cluster := Cluster
-            , site := Site
+            , remote := Site
             , ?snk_meta := #{node := Node}
             })
     end,
@@ -452,7 +553,7 @@ wait_site_kicked(WaitOnSites, Cluster, Site) ->
         ?block_until(
            #{ ?snk_kind := classy_member_leave
             , cluster := Cluster
-            , site := Site
+            , remote := Site
             , ?snk_meta := #{node := Node}
             })
     end,
@@ -468,7 +569,7 @@ initialization_hooks(RuntimeData, Trace) ->
      ?projection(node, ?of_kind(classy_on_node_init, Trace))),
   ?assertSameSet(
      Sites,
-     ?projection(site, ?of_kind(classy_create_new_site, Trace))),
+     ?projection(local, ?of_kind(classy_create_new_site, Trace))),
   ?assertSameSet(
      Clusters,
      ?projection(cluster, ?of_kind(classy_create_new_cluster, Trace))).

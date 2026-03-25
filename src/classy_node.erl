@@ -67,8 +67,9 @@
 %% Any `undefined' argument is replaced with a sufficiently unique random string.
 -spec maybe_init_the_site(classy:site() | undefined) -> ok.
 maybe_init_the_site(MaybeSite) ->
-  ensure_value(?the_site, ?on_create_site, MaybeSite),
-  ensure_value(?the_cluster, ?on_create_cluster, undefined).
+  {_, Site} = ensure_value(?the_site, ?on_create_site, [], MaybeSite),
+  _ = ensure_value(?the_cluster, ?on_create_cluster, [Site], undefined),
+  ok.
 
 %% @private
 -spec start_link() -> {ok, pid()}.
@@ -135,7 +136,6 @@ at_lower_level(RunLevel, Fun) ->
 %% @private
 init(_) ->
   process_flag(trap_exit, true),
-  %% logger:update_process_metadata(#{domain => [classy, node]}),
   ets:new(?node_tab, [named_table, protected, {keypos, #node_info.node}]),
   net_kernel:monitor_nodes(
     true,
@@ -371,23 +371,27 @@ init_cluster() ->
   maybe
     {ok, Cluster} ?= the_cluster(),
     {ok, Site} ?= the_site(),
+    logger:update_process_metadata(
+      #{ local => Site
+       }),
     {ok, _} = classy_sup:ensure_membership(Cluster, Site),
     S = adjust_run_level(
           #s{ cluster = Cluster
             , site = Site
             }),
-    ?tp(debug, classy_init_clustering, #{site => Site, cluster => Cluster}),
+    ?tp(debug, classy_init_clustering, #{local => Site, cluster => Cluster}),
     {ok, S}
   else
     _ ->
       {error, default_site_not_initialized}
   end.
 
--spec ensure_value(?the_cluster | ?the_site, ?on_create_cluster | ?on_create_site, binary() | undefined) -> ok.
-ensure_value(Key, OnCreateHook, Default) ->
+-spec ensure_value(?the_cluster | ?the_site, ?on_create_cluster | ?on_create_site, list(), binary() | undefined) ->
+        {boolean(), binary()}.
+ensure_value(Key, OnCreateHook, HookArgs, Default) ->
   case classy_table:lookup(?ptab, Key) of
     [Bin] when is_binary(Bin) ->
-      ok;
+      {false, Bin};
     [] ->
       case Default of
         undefined ->
@@ -395,8 +399,9 @@ ensure_value(Key, OnCreateHook, Default) ->
         Val when is_binary(Val) ->
           ok
       end,
-      classy_hook:foreach(OnCreateHook, [Val]),
-      set_val(Key, Val)
+      classy_hook:foreach(OnCreateHook, [Val | HookArgs]),
+      set_val(Key, Val),
+      {true, Val}
   end.
 
 set_val(Key, Val) when is_binary(Val), Key =/= ?the_site orelse Key =/= ?the_cluster ->
