@@ -19,6 +19,7 @@
 
         , sync_stop_proc/3
         , ensure_list/1
+        , is_normal_exit/1
         ]).
 
 -export_type([unix_time_s/0, wakeup_timer/0]).
@@ -109,6 +110,14 @@ ensure_list(L) when is_list(L) ->
   L;
 ensure_list(Bin) when is_binary(Bin) ->
   binary_to_list(Bin).
+
+-spec is_normal_exit(_) -> boolean().
+is_normal_exit(Reason) ->
+  case Reason of
+    normal   -> true;
+    shutdown -> true;
+    _        -> false
+  end.
 
 %%================================================================================
 %% Internal functions

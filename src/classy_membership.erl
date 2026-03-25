@@ -283,7 +283,7 @@ handle_call(#call_sync{}, _From, S0) ->
   S = handle_sync(S0),
   {reply, ok, S};
 handle_call(Call, From, S) ->
-  ?tp(warning, classy_unknown_event,
+  ?tp(warning, ?classy_unknown_event,
       #{ kind => call
        , from => From
        , content => Call
@@ -297,7 +297,7 @@ handle_cast(#cast_sync{} = Req, S0) ->
   run_hooks(S),
   {noreply, S};
 handle_cast(Cast, S) ->
-  ?tp(warning, classy_unknown_event,
+  ?tp(warning, ?classy_unknown_event,
       #{ kind => cast
        , content => Cast
        , server => ?MODULE
@@ -311,7 +311,7 @@ handle_info(#to_sync_out{}, S0) ->
   S = handle_sync(S0#s{sync_timer = undefined}),
   {noreply, need_sync(S)};
 handle_info(Info, S) ->
-  ?tp(warning, classy_unknown_event,
+  ?tp(warning, ?classy_unknown_event,
       #{ kind => info
        , content => Info
        , server => ?MODULE
@@ -319,7 +319,14 @@ handle_info(Info, S) ->
   {noreply, S}.
 
 %% @private
-terminate(_Reason, #s{}) ->
+terminate(Reason, #s{cluster = Cluster, site = Site}) ->
+  classy_lib:is_normal_exit(Reason) orelse
+    ?tp(warning, ?classy_abnormal_exit,
+        #{ server => ?MODULE
+         , cluster => Cluster
+         , site => Site
+         , reason => Reason
+         }),
   classy_table:flush(?ptab).
 
 %%================================================================================

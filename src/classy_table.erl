@@ -210,7 +210,7 @@ handle_call(#call_force_compaction{}, From, S0) ->
 handle_call(#call_drop{}, From, S) ->
   {stop, normal, handle_drop(From, S)};
 handle_call(Call, From, S) ->
-  ?tp(warning, classy_unknown_event,
+  ?tp(warning, ?classy_unknown_event,
       #{ kind => call
        , from => From
        , content => Call
@@ -220,7 +220,7 @@ handle_call(Call, From, S) ->
 
 %% @private
 handle_cast(Cast, S) ->
-  ?tp(warning, classy_unknown_event,
+  ?tp(warning, ?classy_unknown_event,
       #{ kind => cast
        , content => Cast
        , server => ?MODULE
@@ -231,7 +231,7 @@ handle_cast(Cast, S) ->
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
 handle_info(Info, S) ->
-  ?tp(warning, classy_unknown_event,
+  ?tp(warning, ?classy_unknown_event,
       #{ kind => info
        , content => Info
        , server => ?MODULE

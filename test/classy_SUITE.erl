@@ -9,6 +9,7 @@
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 -include_lib("proper/include/proper.hrl").
+-include("src/classy_internal.hrl").
 
 -define(ON(SITE, BODY), classy_test_site:call(SITE, fun() -> BODY end)).
 
@@ -48,7 +49,8 @@ t_010_cluster(_Conf) ->
        ?assertMatch(ok, classy_test_site:stop(<<"foo">>)),
        ?assertMatch(ok, classy_test_site:stop(<<"foo">>))
      end,
-     []).
+     [ fun no_unexpected_events/1
+     ]).
 
 %% This testcase verifies happy case of joining one node to another:
 t_020_join(Conf) ->
@@ -159,7 +161,7 @@ t_030_kick(Conf) ->
         , clusters => [Cluster1]
         }
      end,
-     [
+     [ fun no_unexpected_events/1
      ]).
 
 %% Verify that node can be kicked from the cluster while down:
@@ -223,6 +225,7 @@ t_040_kick_in_absentia(Conf) ->
                           , ?snk_meta := #{node := N1}
                           } <- Trace])
         end}
+     , fun no_unexpected_events/1
      ]).
 
 %% Verify that join and kick can be forbidden via hooks:
@@ -271,7 +274,8 @@ t_050_pre_checks(Conf) ->
           ok,
           ?ON(S2, classy:kick_node(N1, force)))
      end,
-     []).
+     [ fun no_unexpected_events/1
+     ]).
 
 t_060_at_lower_level(_Config) ->
   S1 = <<"s1">>,
@@ -299,6 +303,7 @@ t_060_at_lower_level(_Config) ->
                ],
                ?projection(to, ?of_kind(classy_change_run_level, Trace)))
         end}
+     , fun no_unexpected_events/1
      ]).
 
 t_999_fuzz(_Config) ->
@@ -346,7 +351,7 @@ t_999_fuzz(_Config) ->
          after
            ok = classy_test_cluster:stop(normal)
          end,
-         [
+         [ fun no_unexpected_events/1
          ])),
   snabbkaffe:stop().
 
@@ -367,6 +372,17 @@ fuzz_verify(S = #{sites := Sites}) ->
            classy_test_site:call(Site, classy, nodes, [running]))
     end,
     classy_test_fuzzer:running_sites(S)).
+
+%%================================================================================
+%% Trace specs
+%%================================================================================
+
+no_unexpected_events(Trace) ->
+  ?assertMatch(
+     [],
+     ?of_kind(
+        [?classy_unknown_event, ?classy_abnormal_exit],
+        Trace)).
 
 %%================================================================================
 %% Internal functions

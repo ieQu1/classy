@@ -181,7 +181,7 @@ handle_call(#call_at_run_level{level = RequestedRunLevel, function = Fun}, _From
         end,
   {reply, Ret, adjust_run_level(S)};
 handle_call(Call, From, S) ->
-  ?tp(warning, classy_unknown_event,
+  ?tp(warning, ?classy_unknown_event,
       #{ kind => call
        , from => From
        , content => Call
@@ -193,7 +193,7 @@ handle_call(Call, From, S) ->
 handle_cast(#cast_membership_change{} = Cast, S) ->
   handle_membership_change_event(Cast, S);
 handle_cast(Cast, S) ->
-  ?tp(warning, classy_unknown_event,
+  ?tp(warning, ?classy_unknown_event,
       #{ kind => cast
        , content => Cast
        , server => ?MODULE
@@ -206,7 +206,7 @@ handle_info({NodeUpOrDown, _Node, _}, S) when NodeUpOrDown =:= nodeup; NodeUpOrD
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
 handle_info(Info, S) ->
-  ?tp(warning, classy_unknown_event,
+  ?tp(warning, ?classy_unknown_event,
       #{ kind => info
        , content => Info
        , server => ?MODULE
@@ -214,7 +214,12 @@ handle_info(Info, S) ->
   {noreply, S}.
 
 %% @private
-terminate(_Reason, S) ->
+terminate(Reason, S) ->
+  classy_lib:is_normal_exit(Reason) orelse
+    ?tp(warning, ?classy_abnormal_exit,
+        #{ server => ?MODULE
+         , reason => Reason
+         }),
   case S of
     #s{} -> change_run_level(run_level(?stopped), S);
     _    -> ok

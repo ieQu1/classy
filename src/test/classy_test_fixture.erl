@@ -34,7 +34,6 @@
         , init_per_node/4
         , cleanup_per_node/4
 
-        , exit_reason_to_success/1
         , defaults/1
         ]).
 
@@ -145,14 +144,6 @@ cleanup_per_node(Fixtures, Site, Node, State) ->
         safe_cleanup_call(Module, cleanup_per_node, [Site, Node, Conf, State])
     end,
     lists:reverse(Fixtures)).
-
--spec exit_reason_to_success(_) -> boolean().
-exit_reason_to_success(Reason) ->
-  case Reason of
-    normal   -> true;
-    shutdown -> true;
-    _        -> false
-  end.
 
 defaults(TestCase) ->
   [ {classy_test_workdir, #{testcase => TestCase}}

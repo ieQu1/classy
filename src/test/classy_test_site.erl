@@ -28,6 +28,7 @@
 
 -export_type([conf/0]).
 
+-include("classy_internal.hrl").
 -include_lib("snabbkaffe/include/trace_test.hrl").
 
 %%================================================================================
@@ -78,7 +79,6 @@ which_node(Site) ->
 -spec start(classy:site()) -> ok | {error, _}.
 start(Site) ->
   start(Site, binary_to_atom(Site)).
-
 
 %% @doc Start the site if stopped, using `NodeName' as a prefix for the node.
 %% Resulting node will be named `NodeName@Host'.
@@ -199,23 +199,46 @@ handle_call(#call_stop{}, _From, S0 = #s{pid = Pid}) ->
 handle_call(#call_is_running{}, _From, S = #s{pid = Pid}) ->
   Reply = is_pid(Pid) andalso is_process_alive(Pid),
   {reply, Reply, S};
-handle_call(_Call, _From, S) ->
+handle_call(Call, From, S) ->
+  ?tp(warning, ?classy_unknown_event,
+      #{ kind => call
+       , from => From
+       , content => Call
+       , server => ?MODULE
+       }),
   {reply, {error, unknown_call}, S}.
 
 %% @private
-handle_cast(_Cast, S) ->
+handle_cast(Cast, S) ->
+  ?tp(warning, ?classy_unknown_event,
+      #{ kind => cast
+       , content => Cast
+       , server => ?MODULE
+       }),
   {noreply, S}.
 
 %% @private
+handle_info({'EXIT', Pid, Reason}, S = #s{pid = Pid}) ->
+  {stop, {unexpected_peer_stop, Reason}, S};
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
-handle_info(_Info, S) ->
+handle_info(Info, S) ->
+  ?tp(warning, ?classy_unknown_event,
+      #{ kind => info
+       , content => Info
+       , server => ?MODULE
+       }),
   {noreply, S}.
 
 %% @private
 terminate(Reason, S0 = #s{site = Site, spec = Spec, fixture_state = FS}) ->
+  classy_lib:is_normal_exit(Reason) orelse
+    ?tp(warning, ?classy_abnormal_exit,
+        #{ server => ?MODULE
+         , reason => Reason
+         }),
   _ = do_stop(S0),
-  Success = classy_test_fixture:exit_reason_to_success(Reason),
+  Success = classy_lib:is_normal_exit(Reason),
   #{fixtures := Fixtures} = Spec,
   classy_test_fixture:cleanup_per_site(Fixtures, Site, Success, FS),
   ?tp(classy_test_site_destroyed, #{site => Site});
@@ -249,7 +272,7 @@ do_start(Name, S0) ->
                        , args => Args0 ++ Args
                        },
       ?tp(debug, classy_test_site_start, #{site => Site}),
-      {ok, Pid, Node} = peer:start(StartArgs),
+      {ok, Pid, Node} = peer:start_link(StartArgs),
       S = S0#s{ name = Name
               , pid = Pid
               , node = Node
@@ -280,6 +303,7 @@ do_stop(S) ->
   is_map(NFS) andalso
     classy_test_fixture:cleanup_per_node(Fixtures, Site, Node, NFS),
   persistent_term:erase(?call_via(Site)),
+  unlink(Pid),
   peer:stop(Pid),
   catch gproc:unregister_name(?node_name(Name)),
   {ok, S#s{ pid = undefined

@@ -37,4 +37,8 @@
 -define(cluster, cluster).
 -define(quorum, quorum).
 
+%% Trace events
+-define(classy_unknown_event, classy_unknown_event).
+-define(classy_abnormal_exit, classy_abnormal_exit).
+
 -endif.
