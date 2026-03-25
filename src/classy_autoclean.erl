@@ -74,7 +74,6 @@ terminate(_Reason, _S) ->
 %%================================================================================
 %% Internal exports
 %%================================================================================
-
 -spec get_last_alive_at(classy_lib:unix_time_s(), classy:site()) -> classy_lib:unix_time_s().
 get_last_alive_at(RemoteT, Site) ->
   case classy_table:lookup(?tab, Site) of

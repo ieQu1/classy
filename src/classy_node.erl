@@ -50,9 +50,9 @@
         , function :: fun(() -> _)
         }).
 
--define(node_tab, classy_node_status_tab).
+-define(site_info, classy_site_status_tab).
 
--record(node_info, {node, cluster, isup, site}).
+-record(site_info, {isup, node, last_alive_at}).
 
 -type run_level_int() :: 0..3.
 -type run_level_atom() :: ?stopped | ?single | ?cluster | ?quorum.
@@ -136,13 +136,13 @@ at_lower_level(RunLevel, Fun) ->
 %% @private
 init(_) ->
   process_flag(trap_exit, true),
-  ets:new(?node_tab, [named_table, protected, {keypos, #node_info.node}]),
   net_kernel:monitor_nodes(
     true,
     #{ node_type => visible
      , nodedown_reason => true
      }),
-  classy_table:open(?ptab, #{}),
+  ok = classy_table:open(?ptab, #{}),
+  ok = classy_table:open(?site_info, #{}),
   classy:on_membership_change(fun on_membership_change/4, -100),
   classy_hook:foreach(?on_node_init, []),
   case init_cluster() of
@@ -202,6 +202,7 @@ handle_cast(Cast, S) ->
 
 %% @private
 handle_info({NodeUpOrDown, _Node, _}, S) when NodeUpOrDown =:= nodeup; NodeUpOrDown =:= nodedown ->
+  update_sites_status(S),
   {noreply, adjust_run_level(S)};
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
@@ -220,6 +221,8 @@ terminate(Reason, S) ->
         #{ server => ?MODULE
          , reason => Reason
          }),
+  classy_table:stop(?ptab, 1_000),
+  classy_table:stop(?site_info, 1_000),
   case S of
     #s{} -> change_run_level(run_level(?stopped), S);
     _    -> ok
@@ -284,6 +287,7 @@ handle_membership_change_event(
         {error, Err} -> {stop, Err, undefined}
       end;
      Cluster =:= ThisCluster ->
+      update_sites_status(S0),
       {noreply, adjust_run_level(S0)};
      true ->
       {noreply, S0}
@@ -354,6 +358,7 @@ on_leave(S0 = #s{cluster = Cluster, site = Local}, Intent) ->
   S = change_run_level(run_level(?stopped), S0),
   classy_table:delete(?ptab, ?the_cluster),
   classy_hook:foreach(?on_post_kick, [Cluster, Local, Intent]),
+  classy_table:clear(?site_info),
   case Intent of
     join ->
       {ok, S#s{cluster = undefined}};
@@ -366,6 +371,12 @@ join_cluster(Cluster, Local, S = #s{run_level = 0}) ->
   classy_hook:foreach(?on_post_join, [Cluster, Local]),
   set_val(?the_cluster, Cluster),
   {ok, S#s{cluster = Cluster}}.
+
+update_sites_status(S = #s{cluster = Cluster, site = Site}) ->
+  Nodes = [node() | nodes()],
+  Members = classy_membership:members(Cluster, Site),
+  NodesOfSite = classy_membership:node_of_site(Cluster, Site),
+
 
 init_cluster() ->
   maybe
@@ -380,6 +391,7 @@ init_cluster() ->
             , site = Site
             }),
     ?tp(debug, classy_init_clustering, #{local => Site, cluster => Cluster}),
+    update_sites_status(S),
     {ok, S}
   else
     _ ->
