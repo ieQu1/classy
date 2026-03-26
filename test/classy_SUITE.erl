@@ -14,6 +14,7 @@
 -define(ON(SITE, BODY), classy_test_site:call(SITE, fun() -> BODY end)).
 
 -define(assertSameSet(EXP, GOT), ?assertEqual(lists:sort(EXP), lists:sort(GOT))).
+-define(assertSameSet(EXP, GOT, COMMENT), ?assertEqual(lists:sort(EXP), lists:sort(GOT), COMMENT)).
 
 %%================================================================================
 %% Tests
@@ -343,6 +344,8 @@ t_999_fuzz(_Config) ->
            #{ module => ?MODULE
             , sites => [ {<<"foo">>, #{}}
                        , {<<"bar">>, #{}}
+                       , {<<"baz">>, #{}}
+                       , {<<"quux">>, #{}}
                        ]
             }),
          #{timetrap => 5_000 * length(Cmds) + 30_000},
@@ -377,10 +380,17 @@ fuzz_verify(S = #{sites := Sites}) ->
            10,
            ?assertSameSet(
               ExpectedSites,
-              classy_test_site:call(Site, classy, sites, []))),
-        ?assertSameSet(
-           [classy_test_site:which_node(I) || I <- ExpectedSites],
-           classy_test_site:call(Site, classy, nodes, [running]))
+              classy_test_site:call(Site, classy, sites, []),
+              #{ on => Site
+               })),
+        ?retry(
+           100,
+           10,
+           ?assertSameSet(
+              [classy_test_site:which_node(I) || I <- ExpectedSites],
+              classy_test_site:call(Site, classy, nodes, [running]),
+              #{ on => Site
+               }))
     end,
     classy_test_fuzzer:running_sites(S)).
 
@@ -499,7 +509,7 @@ end_per_suite(Cfg) ->
   Cfg.
 
 general_commands(S) ->
-  [ {1, {call, ?MODULE, fuzz_verify, [S]}}
+  [ {5, {call, ?MODULE, fuzz_verify, [S]}}
   ].
 
 next_state(S, _Ret, {call, ?MODULE, fuzz_verify, _}) ->

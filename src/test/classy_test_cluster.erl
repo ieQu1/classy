@@ -105,7 +105,8 @@ cluster_cleanup_entrypoint(Parent, Fixtures, FixtureState) ->
       classy_test_fixture:cleanup_per_cluster(
         Fixtures,
         classy_lib:is_normal_exit(Reason),
-        FixtureState)
+        FixtureState),
+      exit(shutdown)
   end.
 
 %%================================================================================

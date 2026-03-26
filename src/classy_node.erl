@@ -395,6 +395,7 @@ join_cluster(Cluster, Local, S = #s{run_level = 0}) ->
   set_val(?the_cluster, Cluster),
   {ok, S#s{cluster = Cluster}}.
 
+%% Update node tracking information
 update_sites_status(#s{cluster = Cluster, site = Site}) ->
   %% Gather data:
   Nodes = [node() | erlang:nodes()],
