@@ -317,6 +317,48 @@ t_060_at_lower_level(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
+t_070_cleanup(_Config) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
+  AppConf = {classy_test_app,
+             #{ app => classy
+              , env => #{ quorum => 2
+                        , max_site_downtime => 1
+                        }
+              }},
+  Conf = #{fixtures => [AppConf]},
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       %% Prepare system:
+       N1 = create_start_site(S1, Conf),
+       N2 = create_start_site(S2, Conf),
+       N3 = create_start_site(S3, Conf),
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertMatch(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       wait_site_joined(Sites, Cluster, S3),
+       %% Stop two sites. Autoclean on S1 should not attempt to delete
+       %% anything due to lack of quorum:
+       classy_test_site:stop(S2),
+       classy_test_site:stop(S3),
+       ct:sleep(5_000),
+       ?assertSameSet(Sites, ?ON(S1, classy:sites())),
+       %% Bring up S2 and restore quorum, that should lead to deletion of S3:
+       ?wait_async_action(
+          classy_test_site:start(S2),
+          #{?snk_kind := automatically_kick_down_site}),
+       wait_site_kicked([S1, S2], Cluster, S3),
+       ?assertSameSet([S1, S2], ?ON(S1, classy:sites())),
+       ?assertSameSet([S1, S2], ?ON(S2, classy:sites()))
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
 t_999_fuzz(_Config) ->
   %% NOTE: we set timeout at the lowest level to capture the trace
   %% and have a nicer error message.
@@ -504,6 +546,13 @@ validate_site_event(#{?snk_kind := classy_joined_cluster},
   E;
 validate_site_event(#{?snk_kind := classy_create_new_cluster},
                     #{?snk_kind := classy_change_run_level, to := single} = E) ->
+  E;
+%%   Abrupt stop:
+validate_site_event(_,
+                    #{?snk_kind := classy_test_site_stop} = E) ->
+  E;
+validate_site_event(#{?snk_kind := classy_test_site_stop},
+                    #{?snk_kind := classy_change_run_level, to := single} = E) ->
   E.
 
 site_of_event(#{?snk_kind := Kind, local := Site}) when
@@ -516,6 +565,8 @@ site_of_event(#{?snk_kind := Kind, local := Site}) when
     Kind =:= classy_init_clustering ->
   Site;
 site_of_event(#{?snk_kind := classy_change_run_level, ?snk_meta := #{local := Site}}) ->
+  Site;
+site_of_event(#{?snk_kind := classy_test_site_stop, site := Site}) ->
   Site;
 site_of_event(_) ->
   undefined.
@@ -550,9 +601,12 @@ init_per_testcase(TC, Cfg) ->
 create_start_site(Site, CustomConf) ->
   Fixture = {classy_test_app,
              #{ app => classy
-              , env => #{setup_hooks => {?MODULE, setup_hooks, [Site]}}
+              , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
+                        , cleanup_check_interval => 100
+                        }
               }},
-  Conf = CustomConf#{fixtures => [Fixture]},
+  Fixtures = maps:get(fixtures, CustomConf, []),
+  Conf = CustomConf#{fixtures => [Fixture | Fixtures]},
   ?assertMatch(ok, classy_test_cluster:ensure_site(Site, Conf)),
   ?assertMatch(ok, classy_test_site:start(Site)),
   classy_test_site:which_node(Site).

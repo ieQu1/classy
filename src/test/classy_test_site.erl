@@ -298,12 +298,12 @@ do_stop(S) ->
     , node = Node
     , node_fixture_state = NFS
     } = S,
-  ?tp(debug, classy_test_site_stop, #{site => Site}),
   is_map(NFS) andalso
     classy_test_fixture:cleanup_per_node(Fixtures, Site, Node, NFS),
   persistent_term:erase(?call_via(Site)),
   unlink(Pid),
   peer:stop(Pid),
+  ?tp(debug, classy_test_site_stop, #{site => Site}),
   catch gproc:unregister_name(?node_name(Name)),
   {ok, S#s{ pid = undefined
           , node = undefined

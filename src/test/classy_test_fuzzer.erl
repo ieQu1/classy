@@ -152,7 +152,6 @@ kick_site(Origin, Target, Intent) ->
          end,
          10_000),
        #{ ?snk_kind := classy_member_leave
-        , cluster   := Cluster
         , remote    := Target
         , local     := Origin
         },

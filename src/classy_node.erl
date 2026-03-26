@@ -53,9 +53,6 @@
         , function :: fun(() -> _)
         }).
 
--define(site_info, classy_site_status_tab).
--record(site_info, {isup, node, last_update}).
-
 -type run_level_int() :: 0..3.
 -type run_level_atom() :: ?stopped | ?single | ?cluster | ?quorum.
 
@@ -401,11 +398,11 @@ join_cluster(Cluster, Local, S = #s{run_level = 0}) ->
   {ok, S#s{cluster = Cluster}}.
 
 %% Update node tracking information
-update_sites_status(#s{cluster = Cluster, site = Site}) ->
+update_sites_status(#s{cluster = Cluster, site = Local}) ->
   %% Gather data:
   Nodes = [node() | erlang:nodes()],
-  Members = classy_membership:members(Cluster, Site),
-  NodesOfSite = classy_membership:node_of_site(Cluster, Site),
+  Members = classy_membership:members(Cluster, Local),
+  NodesOfSite = classy_membership:node_of_site(Cluster, Local),
   %% Update members:
   lists:foreach(
     fun(Site) ->

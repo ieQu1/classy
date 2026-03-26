@@ -52,9 +52,37 @@ Default: 5s.
 
 Default timeout for remote procedure calls.
 
+## `classy.n_sites`
+
+Type: `pos_integer()`.
+
+Default: 1.
+
+Minimum number of running members necessary to advance `run_stage` from `single` to `cluster`.
+
+## `classy.quorum`
+
+Type: `pos_integer()`.
+
+Default: 1.
+
+Minimum number of running members necessary to advance `run_stage` from `cluster` to `quorum`.
+
+## `classy.max_site_downtime`
+
+Type: `pos_integer() | infinity`.
+
+Default: `infinity`.
+
+Unit: s.
+
+Automatically kick sites that have been down longer than this value from the cluster.
+Note: to prevent network-isolated nodes from kicking their peers,
+quorum among the running nodes is required to perform the act.
+
 ## `classy.forget_after`
 
-Type: `pos_integer()`
+Type: `pos_integer()`.
 
 Unit: s.
 
@@ -74,21 +102,15 @@ Since at step 4 we removed the data about event 2., A will reappear in the clust
 
 So `forget_timeout` should be set to a fairly large value to make sure it doesn't cover nodes that can go back online.
 
-## `classy.n_sites`
+## `classy.cleanup_check_interval`
 
-Type: `pos_integer()`,
+Type: `pos_integer()`.
 
-Default: 1.
+Default: 30_000.
 
-Minimum number of running members necessary to advance `run_stage` from `single` to `cluster`.
+Unit: ms.
 
-## `classy.quorum`
-
-Type: `pos_integer()`,
-
-Default: 1.
-
-Minimum number of running members necessary to advance `run_stage` from `cluster` to `quorum`.
+Autoclean check interval.
 
 # Setting default site and cluster
 

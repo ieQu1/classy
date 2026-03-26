@@ -41,4 +41,8 @@
 -define(classy_unknown_event, classy_unknown_event).
 -define(classy_abnormal_exit, classy_abnormal_exit).
 
+%% Site information:
+-define(site_info, classy_site_status_tab).
+-record(site_info, {isup, node, last_update}).
+
 -endif.

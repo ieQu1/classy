@@ -48,7 +48,10 @@ init_per_node(Site, _Node, Conf, State) ->
   ok = classy_test_site:call(
          Site,
          fun() ->
-             ok = application:load(App),
+             case application:load(App) of
+               ok                           -> ok;
+               {error, {already_loaded, _}} -> ok
+             end,
              maps:foreach(
                fun(K, V) ->
                    application:set_env(App, K, V)
