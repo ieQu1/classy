@@ -325,9 +325,9 @@ t_999_fuzz(_Config) ->
   %% values to avoid blowing up CI. Hence it's recommended to
   %% increase the max_size and numtests when doing local
   %% development using "apps/emqx/test/sessds.cfg"
-  NTests = ct:get_config({fuzzer, n_tests}, 10),
+  NTests = ct:get_config({fuzzer, n_tests}, 100),
   MaxSize = ct:get_config({fuzzer, max_size}, 100),
-  NCommandsFactor = ct:get_config({fuzzer, command_multiplier}, 1),
+  NCommandsFactor = ct:get_config({fuzzer, command_multiplier}, 2),
   ?run_prop(
      #{ proper =>
           #{ timeout => 3_000_000
@@ -354,12 +354,16 @@ t_999_fuzz(_Config) ->
            io:format(user, "*** Commands:~n~s~n", [classy_test_fuzzer:format_cmds(Cmds)]),
            %% Initialize the system:
            classy_test_cluster:start_link(
-             #{ fixtures => classy_test_fixture:defaults(?FUNCTION_NAME)
+             #{ peer => #{ args => ["-kernel", "prevent_overlapping_partitions", "false"]
+                         }
+              , fixtures => classy_test_fixture:defaults(?FUNCTION_NAME)
               }),
            %% Run test:
            {_History, State, Result} = proper_statem:run_commands(classy_test_fuzzer, Cmds),
            ct:log(info, "*** Model state:~n  ~p~n", [State]),
            ct:log("*** Result:~n  ~p~n", [Result]),
+           %% Always verify the final state:
+           fuzz_verify(State),
            Result =:= ok orelse error({invalid_result, Result})
          after
            ok = classy_test_cluster:stop(normal)
@@ -369,12 +373,15 @@ t_999_fuzz(_Config) ->
          ])),
   snabbkaffe:stop().
 
+fuzz_verify({init, _}) ->
+  ok;
 fuzz_verify(S = #{sites := Sites}) ->
   ct:sleep(1000),
   lists:foreach(
     fun(Site) ->
         #{Site := #{cluster := Cluster}} = Sites,
         ExpectedSites = classy_test_fuzzer:sites_of_cluster(Cluster, S),
+        %% Check cluster member sites:
         ?retry(
            1000,
            10,
@@ -383,16 +390,31 @@ fuzz_verify(S = #{sites := Sites}) ->
               classy_test_site:call(Site, classy, sites, []),
               #{ on => Site
                })),
+        %% Check all nodes:
         ?retry(
            100,
            10,
            ?assertSameSet(
-              [classy_test_site:which_node(I) || I <- ExpectedSites],
+              [fuzz_node_name(I) || I <- ExpectedSites],
+              classy_test_site:call(Site, classy, nodes, [all]),
+              #{ on => Site
+               })),
+        ?retry(
+           100,
+           10,
+           ?assertSameSet(
+              [fuzz_node_name(I)
+               || I <- ExpectedSites,
+                  classy_test_fuzzer:is_running(I, S)],
               classy_test_site:call(Site, classy, nodes, [running]),
               #{ on => Site
-               }))
+               })),
+        ok
     end,
     classy_test_fuzzer:running_sites(S)).
+
+fuzz_node_name(Site) ->
+  binary_to_atom(<<Site/binary, "@127.0.0.1">>).
 
 %%================================================================================
 %% Trace specs

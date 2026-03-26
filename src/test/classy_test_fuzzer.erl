@@ -9,6 +9,7 @@
 %% API:
 -export([ format_cmds/1
         , cmds/2
+        , is_running/2
         , running_sites/1
         , sites_of_cluster/2
         ]).
@@ -32,7 +33,9 @@
 
 -include_lib("proper/include/proper.hrl").
 -include_lib("stdlib/include/assert.hrl").
--include_lib("snabbkaffe/include/trace_test.hrl").
+
+-define(SNK_COLLECTOR, true).
+-include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
 -dialyzer({nowarn_function,
            [ cmds/2
@@ -119,7 +122,8 @@ do_join_node(Origin, TargetNode, Intent, Retry) ->
              Origin,
              fun() ->
                  classy:join_node(TargetNode, Intent)
-             end),
+             end,
+             10_000),
   case Result of
     ok ->
       ok;
@@ -139,11 +143,21 @@ kick_site(Origin, Target, Intent) ->
        , target => Target
        , intent => Intent
        }),
-  classy_test_site:call(
-    Origin,
-    fun() ->
-        classy:kick_site(Target, Intent)
-    end).
+  {Ret, _} =
+    ?wait_async_action(
+       classy_test_site:call(
+         Origin,
+         fun() ->
+             classy:kick_site(Target, Intent)
+         end,
+         10_000),
+       #{ ?snk_kind := classy_member_leave
+        , cluster   := Cluster
+        , remote    := Target
+        , local     := Origin
+        },
+       5_000),
+  Ret.
 
 %%================================================================================
 %% Utility functions
@@ -169,6 +183,10 @@ cmds(NCommandsFactor, InitState) ->
     proper_statem:commands(
       ?MODULE,
       initial_state(InitState))).
+
+is_running(Site, #{sites := Sites}) ->
+  #{Site := #{running := Running}} = Sites,
+  Running.
 
 running_sites(#{sites := Sites}) ->
   maps:fold(
@@ -306,10 +324,6 @@ maybe_generate(Key, Conf, Generator) ->
     #{Key := Val} -> exactly(Val);
     #{}           -> Generator
   end.
-
-is_running(Site, #{sites := Sites}) ->
-  #{Site := #{running := Ret}} = Sites,
-  Ret.
 
 update_site(Site, Fun, S = #{sites := Sites}) ->
   S#{sites := maps:update_with(Site, Fun, Sites)}.

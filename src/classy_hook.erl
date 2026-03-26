@@ -105,7 +105,7 @@ init() ->
                end,
         ?tp(notice, Kind,
             #{ cluster => Cluster
-             , site => Local
+             , local => Local
              , remote => Remote
              })
     end,

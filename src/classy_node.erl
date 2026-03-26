@@ -99,10 +99,15 @@ the_site() ->
 %% This function performs all necessary checks before making any changes.
 -spec join_node(node(), _Intent) -> ok | {error, _}.
 join_node(Node, Intent) ->
-  gen_server:call(
-    ?SERVER,
-    #call_join{node = Node, intent = Intent},
-    infinity).
+  case node() of
+    Node ->
+      ok;
+    _ ->
+      gen_server:call(
+        ?SERVER,
+        #call_join{node = Node, intent = Intent},
+        infinity)
+  end.
 
 %% @doc Kick a site from the cluster.
 %%

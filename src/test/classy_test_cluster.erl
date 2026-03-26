@@ -148,7 +148,7 @@ init({sites, CommonConf, FixtureState}) ->
   Children = #{ id       => peer
               , type     => worker
               , start    => {classy_test_site, start_link, [CommonConf, FixtureState]}
-              , shutdown => 5_000
+              , shutdown => 15_000
               , restart  => permanent
               },
   {ok, {SupFlags, [Children]}}.
