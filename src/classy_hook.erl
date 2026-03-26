@@ -118,14 +118,7 @@ init() ->
              })
     end,
     -100),
-  %% User initializaiton:
-  case application:get_env(classy, setup_hooks) of
-    {ok, {Mod, Func, Args}} ->
-      apply(Mod, Func, Args),
-      ok;
-    undefined ->
-      ok
-  end.
+  run_setup_hooks().
 
 %% @private
 -spec insert(hookpoint(), fun(), prio()) -> hook().
@@ -197,3 +190,29 @@ hooks(Hookpoint) ->
        , ['$1']
        },
   ets:select(?tab, [MS]).
+
+run_setup_hooks() ->
+  case application:get_env(classy, setup_hooks) of
+    {ok, {Mod, Func, Args} = MFA} when is_atom(Mod), is_atom(Func), is_list(Args) ->
+      try
+        apply(Mod, Func, Args)
+      catch
+        EC:Err:Stack ->
+          logger:error(
+            #{ msg => classy_setup_hooks_failed
+             , setup_hooks => MFA
+             , class => EC
+             , reason => Err
+             , stack => Stack
+             }),
+          {error, {setup_hooks_failed, MFA, Err}}
+      end;
+    {ok, BadValue} ->
+      logger:error(
+        #{ msg => classy_invalid_setup_hooks
+         , setup_hooks => BadValue
+         }),
+      {error, {invalid_setup_hooks, BadValue}};
+    undefined ->
+      ok
+  end.

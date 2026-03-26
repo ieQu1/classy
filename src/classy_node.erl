@@ -142,14 +142,27 @@ init(_) ->
     #{ node_type => visible
      , nodedown_reason => true
      }),
-  classy_table:open(?ptab, #{}),
-  classy:on_membership_change(fun on_membership_change/4, -100),
-  classy_hook:foreach(?on_node_init, []),
-  case init_cluster() of
-    {ok, _} = Ok ->
-      Ok;
+  case classy_table:open(?ptab, #{}) of
+    ok ->
+      classy:on_membership_change(fun on_membership_change/4, -100),
+      classy_hook:foreach(?on_node_init, []),
+      case init_cluster() of
+        {ok, _} = Ok ->
+          Ok;
+        {error, Reason} ->
+          logger:error(
+            #{ msg => classy_node_start_failed
+             , reason => Reason
+             }),
+          {stop, Reason, undefined}
+      end;
     {error, Reason} ->
-      {stop, Reason, undefined}
+      logger:error(
+        #{ msg => classy_node_table_open_failed
+         , table => ?ptab
+         , reason => Reason
+         }),
+      {stop, {classy_node_table_open_failed, Reason}}
   end.
 
 %% @private
