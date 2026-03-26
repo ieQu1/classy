@@ -83,9 +83,9 @@
 open(Tab, Options) when is_atom(Tab), is_map(Options) ->
   case classy_sup:start_table(Tab, Options) of
     {ok, Pid} ->
-      gen_server:call(Pid, #call_ensure_open{tab = Tab}, infinity);
+      ensure_open(Pid, Tab);
     {error, {already_started, Pid}} ->
-      gen_server:call(Pid, #call_ensure_open{tab = Tab}, infinity);
+      ensure_open(Pid, Tab);
     Err = {error, _} ->
       Err
   end.
@@ -188,7 +188,12 @@ init([TabName, Options]) ->
 
 %% @private
 handle_continue(restore, S) ->
-  {noreply, restore(S)}.
+  case restore(S) of
+    {ok, S1} ->
+      {noreply, S1};
+    {stop, Reason, S1} ->
+      {stop, Reason, S1}
+  end.
 
 %% @private
 handle_call(#call_ensure_open{}, _From, S) ->
@@ -249,32 +254,44 @@ terminate(_Reason, S = #s{}) ->
 %% Internal functions
 %%================================================================================
 
--spec restore(s()) -> s().
+-spec restore(s()) -> {ok, s()} | {stop, _Reason, s()}.
 restore(S = #s{ets = ETS}) ->
   RegularName = log_name(S, ""),
   NewName = log_name(S, ".NEW"),
   ets:match_delete(ETS, '_'),
   case {is_log(RegularName), is_log(NewName)} of
     {false, false} ->
-      {ok, Log} = open_log(RegularName, read_write),
-      S#s{log = Log};
+      with_log_open(RegularName, read_write, S);
     {true, false} ->
       %% Normal case:
-      {ok, Log} = open_log(RegularName, read_write),
-      {ok, LogSize} = do_restore(Log, start, ETS, 0),
-      S#s{ log = Log
-         , log_size = LogSize
-         };
+      case with_log_open(RegularName, read_write, S) of
+        {ok, S1 = #s{log = Log}} ->
+          case do_restore(Log, start, ETS, 0) of
+            {ok, LogSize} ->
+              {ok, S1#s{log_size = LogSize}};
+            {error, Reason} ->
+              log_restore_failure(S, RegularName, Reason),
+              {stop, {classy_table_restore_failed, S#s.name, RegularName, Reason}, S1}
+          end;
+        {stop, _, _} = Err ->
+          Err
+      end;
     {true, true} ->
       %% Server was stopped while compaction was ongling:
       logger:warning(#{ msg => classy_table_aborted_compaction
                       , log_name => NewName
                       }),
-      ok = rename_log(NewName, NewName ++ ".bup"),
-      restore(S);
+      case rename_log(NewName, NewName ++ ".bup") of
+        ok ->
+          restore(S);
+        {error, Reason} ->
+          log_restore_failure(S, NewName, {rename_failed, Reason}),
+          {stop, {classy_table_restore_failed, S#s.name, NewName, {rename_failed, Reason}}, S}
+      end;
     {false, true} ->
-      %% Should not happen:
-      exit({classy_unrecoverable_aborted_table_compaction, NewName})
+      Reason = {classy_unrecoverable_aborted_table_compaction, NewName},
+      log_restore_failure(S, NewName, Reason),
+      {stop, Reason, S}
   end.
 
 do_restore(Log, Cont0, ETS, N) ->
@@ -288,6 +305,8 @@ do_restore(Log, Cont0, ETS, N) ->
         end,
         Chunk),
       do_restore(Log, Cont, ETS, N + length(Chunk));
+    {error, Reason} ->
+      {error, Reason};
     eof ->
       {ok, N}
   end.
@@ -462,5 +481,42 @@ read_log_chunk(Log, Cont, Size) ->
     eof ->
       eof
   end.
+
+ensure_open(Pid, Tab) ->
+  try
+    gen_server:call(Pid, #call_ensure_open{tab = Tab}, infinity)
+  catch
+    exit:{{classy_table_open_failed, _, _, _} = Reason, {gen_server, call, _}} ->
+      {error, Reason};
+    exit:{Reason, {gen_server, call, _}} ->
+      {error, Reason};
+    exit:Reason ->
+      {error, {classy_table_open_failed, Tab, Reason}}
+  end.
+
+with_log_open(Filename, Mode, S = #s{name = Name, dir = Dir}) ->
+  case open_log(Filename, Mode) of
+    {ok, Log} ->
+      {ok, S#s{log = Log}};
+    {error, Reason} ->
+      logger:error(
+        #{ msg => classy_table_open_failed
+         , table => Name
+         , dir => Dir
+         , file => Filename
+         , mode => Mode
+         , reason => Reason
+         }),
+      {stop, {classy_table_open_failed, Name, Filename, Reason}, S}
+  end.
+
+log_restore_failure(#s{name = Name, dir = Dir}, Filename, Reason) ->
+  logger:error(
+    #{ msg => classy_table_restore_failed
+     , table => Name
+     , dir => Dir
+     , file => Filename
+     , reason => Reason
+     }).
 
 -endif.

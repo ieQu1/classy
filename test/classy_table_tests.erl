@@ -98,6 +98,22 @@ smoke_snapshot_test() ->
     cleanup(Clean)
   end.
 
+missing_table_dir_start_error_test() ->
+  Dir = dir(?FUNCTION_NAME),
+  _ = file:del_dir_r(Dir),
+  application:set_env(classy, table_dir, Dir),
+  application:set_env(classy, table_batch_size, 2),
+  try
+    ?assertMatch(
+       {error, {classy, {{shutdown, {failed_to_start_child, node,
+                                     {classy_node_table_open_failed,
+                                      {classy_table_open_failed, classy_node, _, _}}}},
+                         {classy_app, start, [normal, []]}}}},
+       application:ensure_all_started(classy))
+  after
+    cleanup_apps([classy, tools, optvar, gproc, snabbkaffe])
+  end.
+
 %%================================================================================
 %% Helper functions
 %%================================================================================
@@ -118,8 +134,11 @@ setup(TC) ->
           }.
 
 cleanup(#cleanup{dir = Dir, apps = Apps}) ->
-  [application:stop(A) || A <- lists:reverse(Apps)],
+  cleanup_apps(lists:reverse(Apps)),
   ok = file:del_dir_r(Dir).
+
+cleanup_apps(Apps) ->
+  [application:stop(A) || A <- Apps].
 
 dir(TC) ->
   filename:join("_build/test_data", atom_to_list(TC)).

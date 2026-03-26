@@ -242,33 +242,44 @@ init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluste
     #{ cluster => Cluster
      , local => Site
      }),
-  ok = classy_table:open(
+  case classy_table:open(
          ?ptab,
-         #{ets_options => [{read_concurrency, true}]}),
-  case classy_table:lookup(?ptab, #pk_clock{c = Cluster, s = Site}) of
-    [Clock] -> ok;
-    [] -> Clock = 0
-  end,
-  S0 = #s{ cluster = Cluster
-         , site = Site
-         , clock = Clock
-         },
-  %% Establish own membership in the cluster. The below operation
-  %% (with clock = 0) is used to set the default value.
-  S1 = local_command(
-         0,
-         #call_set{ target = Site
-                  , k = ?mem
-                  , v = true
-                  },
-         S0),
-  S = local_command(
-        #call_set{ target = Site
-                 , k = ?host
-                 , v = node()
-                 },
-        S1),
-  {ok, need_sync(0, S)}.
+         #{ets_options => [{read_concurrency, true}]}) of
+    ok ->
+      case classy_table:lookup(?ptab, #pk_clock{c = Cluster, s = Site}) of
+        [Clock] -> ok;
+        [] -> Clock = 0
+      end,
+      S0 = #s{ cluster = Cluster
+             , site = Site
+             , clock = Clock
+             },
+      %% Establish own membership in the cluster. The below operation
+      %% (with clock = 0) is used to set the default value.
+      S1 = local_command(
+             0,
+             #call_set{ target = Site
+                      , k = ?mem
+                      , v = true
+                      },
+             S0),
+      S = local_command(
+            #call_set{ target = Site
+                     , k = ?host
+                     , v = node()
+                     },
+            S1),
+      {ok, need_sync(0, S)};
+    {error, Reason} ->
+      logger:error(
+        #{ msg => classy_membership_table_open_failed
+         , cluster => Cluster
+         , local => Site
+         , table => ?ptab
+         , reason => Reason
+         }),
+      {stop, {classy_membership_table_open_failed, Reason}}
+  end.
 
 %% @private
 handle_call(#call_set{} = CMD, _From, S0) ->
@@ -327,17 +338,29 @@ terminate(Reason, #s{cluster = Cluster, site = Site}) ->
          , site => Site
          , reason => Reason
          }),
-  classy_table:flush(?ptab).
+  try
+    classy_table:flush(?ptab)
+  catch
+    exit:{noproc, _} ->
+      ok
+  end.
 
 %%================================================================================
 %% Internal functions
 %%================================================================================
 
 handle_sync(S0) ->
-  ok = classy_table:flush(?ptab),
-  S = handle_sync_out(S0),
-  run_hooks(S),
-  S.
+  try
+    ok = classy_table:flush(?ptab),
+    S = handle_sync_out(S0),
+    run_hooks(S),
+    S
+  catch
+    exit:{noproc, _} ->
+      exit(normal);
+    exit:{normal, _} ->
+      exit(normal)
+  end.
 
 %% @doc Total order of the operation.
 %%
