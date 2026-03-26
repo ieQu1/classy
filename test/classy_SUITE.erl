@@ -392,7 +392,10 @@ no_unexpected_events(Trace) ->
   ?assertMatch(
      [],
      ?of_kind(
-        [?classy_unknown_event, ?classy_abnormal_exit],
+        [ ?classy_unknown_event
+        , ?classy_abnormal_exit
+        , classy_table_aborted_compaction
+        ],
         Trace)).
 
 events_on_all_sites(Trace) ->

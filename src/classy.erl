@@ -92,49 +92,15 @@ sites() ->
   maybe
     {ok, Cluster} ?= classy_node:the_cluster(),
     {ok, Local} ?= classy_node:the_site(),
-    ?tp_span(classy_get_members, #{},
-    classy_membership:members(Cluster, Local))
+    classy_membership:members(Cluster, Local)
   else
     _ ->
       []
   end.
 
 -spec nodes(all | running | stopped) -> [node()].
-nodes(running) ->
-  maybe
-    {ok, Cluster} ?= classy_node:the_cluster(),
-    {ok, Local} ?= classy_node:the_site(),
-    %% FIXME: optimize
-    Members = classy_membership:members(Cluster, Local),
-    Sites = classy_membership:site_of_node(Cluster, Local),
-    [I || I <- [node() | erlang:nodes()],
-          case Sites of
-            #{I := Site} -> lists:member(Site, Members);
-            _ -> false
-          end]
-  else _ ->
-      []
-  end;
-nodes(stopped) ->
-  nodes(all) -- nodes(running);
-nodes(all) ->
-  maybe
-    {ok, Cluster} ?= classy_node:the_cluster(),
-    {ok, Local} ?= classy_node:the_site(),
-    Sites = classy_membership:members(Cluster, Local),
-    Nodes = classy_membership:node_of_site(Cluster, Local),
-    lists:flatmap(
-      fun(Site) ->
-          case Nodes of
-            #{Site := Node} -> [Node];
-            #{} -> []
-          end
-      end,
-      Sites)
-  else
-    _ ->
-      []
-  end.
+nodes(Query) ->
+  classy_node:nodes(Query).
 
 %% @doc Lower the run level to the given value and run the specified function.
 %%

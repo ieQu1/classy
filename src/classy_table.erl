@@ -70,8 +70,10 @@
 -record(call_drop, {}).
 -record(call_clear, {}).
 
+%% WAL data:
 -define(w(K, V), {w, K, V}).
 -define(d(K), {d, K}).
+-define(clear, clear).
 
 %%================================================================================
 %% API functions
@@ -115,7 +117,9 @@ stop(Tab, Timeout) ->
 dirty_write(Tab, Key, Val) ->
   gen_server:call(?via(Tab), #call_write{k = Key, v = Val, wal = false}).
 
-%% @doc Write operation to WAL and update RAM representation of the record.
+%% @doc Write operation to WAL, sync WAL and then update RAM representation of the record.
+%%
+%% Note: this is a heavy operation.
 -spec write(tab(), _Key, _Val) -> ok.
 write(Tab, Key, Val) ->
   gen_server:call(?via(Tab), #call_write{k = Key, v = Val, wal = true}).
@@ -214,13 +218,8 @@ handle_call(#call_force_compaction{}, From, S0) ->
       gen_server:reply(From, {error, Reason}),
       {stop, compaction_failed, S}
   end;
-handle_call(#call_clear{}, From, S0 = #s{ets = Ets}) ->
-  S = do_clear(
-        S0,
-        ets:match(
-          Ets,
-          #classy_kv{k = '$1', _ = '_'},
-          batch_size())),
+handle_call(#call_clear{}, From, S0) ->
+  S = do_clear(S0),
   maybe_compact(From, ok, handle_flush(S));
 handle_call(#call_drop{}, From, S) ->
   {stop, normal, handle_drop(From, S)};
@@ -299,7 +298,9 @@ do_restore(Log, Cont0, ETS, N) ->
         fun(?w(K, V)) ->
             ets:insert(ETS, #classy_kv{k = K, v = V});
            (?d(K)) ->
-            ets:delete(ETS, K)
+            ets:delete(ETS, K);
+           (?clear) ->
+            ets:match_delete(ETS, '_')
         end,
         Chunk),
       do_restore(Log, Cont, ETS, N + length(Chunk));
@@ -401,24 +402,16 @@ dump_ets(Log, N, {Batch, Cont}) ->
     N + length(Recs),
     ets:match(Cont)).
 
-do_clear(S, '$end_of_table') ->
-  S;
-do_clear(S0, {Keys, Cont}) ->
-  S = lists:foldl(
-        fun([K], Acc) ->
-            handle_delete(
-              #call_delete{k = K, wal = true},
-              Acc)
-        end,
-        S0,
-        Keys),
-  do_clear(S, ets:match(Cont)).
+do_clear(S = #s{ets = Ets, log = Log, log_size = LogSize}) ->
+  ok = write_log(Log, [?clear]),
+  ets:match_delete(Ets, '_'),
+  S#s{dirty = #{}, log_size = LogSize + 1}.
 
 handle_drop(From, S = #s{ets = Ets, log = Log}) ->
   ets:delete(Ets),
   close_log(Log),
-  file:delete(log_name(S, "")),
   file:delete(log_name(S, ".NEW")),
+  file:delete(log_name(S, "")),
   gen_server:reply(From, ok),
   undefined.
 
@@ -476,7 +469,8 @@ close_log(Log) ->
   disk_log:close(Log).
 
 write_log(Log, Terms) ->
-  disk_log:log_terms(Log, Terms).
+  disk_log:log_terms(Log, Terms),
+  disk_log:sync(Log).
 
 read_log_chunk(Log, Cont, Size) ->
   case disk_log:chunk(Log, Cont, Size) of

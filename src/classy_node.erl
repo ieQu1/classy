@@ -12,6 +12,7 @@
         , kick_site/2
         , the_site/0
         , the_cluster/0
+        , nodes/1
 
         , at_lower_level/2
         ]).
@@ -26,6 +27,8 @@
 
 -include_lib("snabbkaffe/include/trace.hrl").
 -include("classy_internal.hrl").
+
+-compile({no_auto_import, [nodes/1]}).
 
 %%================================================================================
 %% Type declarations
@@ -51,8 +54,7 @@
         }).
 
 -define(site_info, classy_site_status_tab).
-
--record(site_info, {isup, node, last_alive_at}).
+-record(site_info, {isup, node, last_update}).
 
 -type run_level_int() :: 0..3.
 -type run_level_atom() :: ?stopped | ?single | ?cluster | ?quorum.
@@ -123,6 +125,24 @@ at_lower_level(RunLevel, Fun) ->
     #call_at_run_level{level = RunLevel, function = Fun},
     infinity).
 
+-spec nodes(all | running | stopped) -> [node()].
+nodes(Query) ->
+  Filter = case Query of
+             all     -> [];
+             running -> [{'=:=', '$2', true}];
+             stopped -> [{'=:=', '$2', false}]
+           end,
+  MS = { #classy_kv{ v = #site_info{ node = '$1'
+                                   , isup = '$2'
+                                   , _ = '_'
+                                   }
+                   , _ = '_'
+                   }
+       , [{'=/=', '$1', undefined} | Filter]
+       , ['$1']
+       },
+  ets:select(?site_info, [MS]).
+
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
@@ -179,7 +199,7 @@ handle_call(#call_at_run_level{level = RequestedRunLevel, function = Fun}, _From
           EC:Err:Stack ->
             {EC, Err, Stack}
         end,
-  {reply, Ret, adjust_run_level(S)};
+  {reply, Ret, update_runtime(S)};
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => call
@@ -202,8 +222,7 @@ handle_cast(Cast, S) ->
 
 %% @private
 handle_info({NodeUpOrDown, _Node, _}, S) when NodeUpOrDown =:= nodeup; NodeUpOrDown =:= nodedown ->
-  update_sites_status(S),
-  {noreply, adjust_run_level(S)};
+  {noreply, update_runtime(S)};
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
 handle_info(Info, S) ->
@@ -287,11 +306,15 @@ handle_membership_change_event(
         {error, Err} -> {stop, Err, undefined}
       end;
      Cluster =:= ThisCluster ->
-      update_sites_status(S0),
-      {noreply, adjust_run_level(S0)};
+      {noreply, update_runtime(S0)};
      true ->
       {noreply, S0}
   end.
+
+-spec update_runtime(#s{}) -> #s{}.
+update_runtime(S) ->
+  update_sites_status(S),
+  adjust_run_level(S).
 
 handle_kick(Cluster, Local, Target, Intent) ->
   case classy_hook:all(?on_pre_kick, [Cluster, Target, Intent]) of
@@ -337,7 +360,7 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
       classy_membership:cast_sync(Cluster, Local, MemData),
       classy_membership:set_member(Cluster, Local, Local, true),
       classy_membership:flush(Cluster, Local),
-      {ok, adjust_run_level(S0)};
+      {ok, update_runtime(S0)};
     {ok, OldCluster} when OldCluster =/= Cluster ->
       %% Site is currently in a different cluster. Leave it first:
       Intent = join,
@@ -372,26 +395,58 @@ join_cluster(Cluster, Local, S = #s{run_level = 0}) ->
   set_val(?the_cluster, Cluster),
   {ok, S#s{cluster = Cluster}}.
 
-update_sites_status(S = #s{cluster = Cluster, site = Site}) ->
-  Nodes = [node() | nodes()],
+update_sites_status(#s{cluster = Cluster, site = Site}) ->
+  %% Gather data:
+  Nodes = [node() | erlang:nodes()],
   Members = classy_membership:members(Cluster, Site),
   NodesOfSite = classy_membership:node_of_site(Cluster, Site),
-
+  %% Update members:
+  lists:foreach(
+    fun(Site) ->
+        case NodesOfSite of
+          #{Site := Node} ->
+            IsUp = lists:member(Node, Nodes);
+          #{} ->
+            Node = undefined,
+            IsUp = false
+        end,
+        case classy_table:lookup(?site_info, Site) of
+          [#site_info{isup = IsUp, node = Node}] ->
+            %% No changes:
+            ok;
+          _ ->
+            classy_table:dirty_write(
+              ?site_info,
+              Site,
+              #site_info{ isup = IsUp
+                        , node = Node
+                        , last_update = classy_lib:time_s()
+                        })
+        end
+    end,
+    Members),
+  %% Delete info of gone members:
+  ets:foldl(
+    fun(#classy_kv{k = Site}, Acc) ->
+        lists:member(Site, Members) orelse
+          classy_table:dirty_delete(?site_info, Site),
+        Acc
+    end,
+    [],
+    ?site_info),
+  classy_table:flush(?site_info).
 
 init_cluster() ->
   maybe
     {ok, Cluster} ?= the_cluster(),
     {ok, Site} ?= the_site(),
-    logger:update_process_metadata(
-      #{ local => Site
-       }),
+    logger:update_process_metadata(#{local => Site}),
     {ok, _} = classy_sup:ensure_membership(Cluster, Site),
-    S = adjust_run_level(
+    S = update_runtime(
           #s{ cluster = Cluster
             , site = Site
             }),
     ?tp(debug, classy_init_clustering, #{local => Site, cluster => Cluster}),
-    update_sites_status(S),
     {ok, S}
   else
     _ ->
@@ -422,7 +477,7 @@ set_val(Key, Val) when is_binary(Val), Key =/= ?the_site orelse Key =/= ?the_clu
 -spec adjust_run_level(#s{}) -> #s{}.
 adjust_run_level(S = #s{cluster = Cluster, site = Site}) ->
   NKnown = length(classy_membership:members(Cluster, Site)),
-  NRunning = length(classy:nodes(running)),
+  NRunning = length(nodes(running)),
   RunLevel = case NKnown >= classy_lib:n_sites() of
                true  ->
                  case NRunning >= classy:quorum(config) of
