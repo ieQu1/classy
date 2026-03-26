@@ -1,0 +1,41 @@
+name: Run test case
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+    run_test_case:
+        runs-on: ubuntu-latest
+        strategy:
+          fail-fast: false
+          matrix:
+            os:
+              - ubuntu24.04
+            arch:
+              - amd64
+            otp:
+              - "28.2-2"
+            builder:
+              - '6.0-9'
+            elixir:
+              - '1.19.1'
+
+        container: "ghcr.io/emqx/emqx-builder/${{ matrix.builder }}:${{ matrix.elixir }}-${{ matrix.otp }}-${{ matrix.os }}"
+
+        steps:
+        - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+        - name: Install prerequisites
+          run: |
+            apt update
+            apt install -y cmake
+
+        - name: Run tests
+          run: |
+            make test
+            make cover
