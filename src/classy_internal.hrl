@@ -30,6 +30,7 @@
 -define(on_pre_kick, on_pre_kick).
 -define(on_post_kick, on_post_leave).
 -define(on_change_run_level, on_change_run_level).
+-define(on_pre_autoclean, on_pre_autoclean).
 
 %% Run levels:
 -define(stopped, stopped).

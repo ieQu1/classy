@@ -22,6 +22,7 @@
         , post_join/2
         , pre_kick/2
         , post_kick/2
+        , pre_autoclean/2
         , run_level/2
         ]).
 
@@ -219,6 +220,17 @@ pre_kick(Hook, Prio) ->
 post_kick(Hook, Prio) ->
   classy_hook:insert(?on_post_kick, Hook, Prio).
 
+%% @doc Register a hook that runs before autoclean finalizes the
+%% decision to kick a down site.
+%%
+%% WARNING: this hook cannot have side effects.
+-spec pre_autoclean(
+        fun((Remote) -> ok | {error, _}),
+        classy_hook:prio()
+       ) -> classy_hook:hook()
+  when Remote :: site().
+pre_autoclean(Hook, Prio) ->
+  classy_hook:insert(?on_pre_autoclean, Hook, Prio).
 
 %% @doc Register a hook that is executed on change of the run level of
 %% the local site.

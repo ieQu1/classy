@@ -110,6 +110,8 @@ check_down_sites() ->
             {ok, DownSince} ?= last_alive_at(Site),
             true ?= is_integer(DownSince),
             true ?= DownSince < MinLastUpTime,
+            %% Run hooks:
+            ok ?= classy_hook:all(?on_pre_autoclean, [Site]),
             %% Now we're pretty certain that the site is really down:
             ?tp(notice, automatically_kick_down_site,
                 #{ site          => Site
