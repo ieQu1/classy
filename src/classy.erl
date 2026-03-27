@@ -1,6 +1,13 @@
 %%--------------------------------------------------------------------
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
+
+%% @doc Main interface module of `classy'.
+%%
+%% Note: business releases can install hooks by setting
+%% `classy:setup_hooks' application environment variable to a tuple
+%% `{Module, Function, Args}'. This MFA can contain calls to various
+%% `classy:on_...' functions.
 -module(classy).
 
 %% API:
@@ -53,7 +60,7 @@
                      | _.
 
 -type kick_intent() :: join   %% Intent set by system when site leaves the cluster to join another one
-                     | kicked %% Intent set by system when site is kicked by the third party
+                     | kicked %% Intent set by system when site is kicked by a third party
                      | _.
 
 -type run_level() :: stopped | single | cluster.
@@ -106,7 +113,7 @@ nodes(Query) ->
 %% @doc Lower the run level to the given value and run the specified function.
 %%
 %% This function can be used to implement migrations that require
-%% business applications be stopped.
+%% business applications to be stopped.
 -spec at_lower_level(classy_node:run_level_atom(), fun(() -> Ret)) ->
         {ok, Ret} |
         {error | exit | throw, _Reason, _Stacktrace}.
@@ -122,7 +129,7 @@ at_lower_level(RunLevel, Fun) ->
 %% <itemize>
 %% <li>`Integer': any integer value</li>
 %% <li>`config': Return value of `classy.quorum' application environment variable</li>
-%% <li> `running': Quorum among the running sites, not less than `quorum(config)'</li>
+%% <li>`running': Quorum among the running sites, not less than `quorum(config)'</li>
 %% </itemize>
 -spec quorum(config | running | non_neg_integer()) -> pos_integer().
 quorum(N) when is_integer(N), N >= 0 ->
@@ -138,14 +145,9 @@ quorum(running) ->
 %% Hooks
 %%--------------------------------------------------------------------------------
 
-%% Note: business release can install hooks by setting
-%% `classy:setup_hooks' application environment variable to a tuple
-%% `{Module, Function, Args}'. This MFA can contain calls to various
-%% `classy:on_...' functions.
-
 %% @doc Register a hook that is executed when the node (not the site)
 %% starts. It is called before `the_site' and `the_cluster' are
-%% initialized and can be used to overreride the default cluster and
+%% initialized and can be used to override the default cluster and
 %% site initialization logic.
 -spec on_node_init(fun(() -> _), classy_hook:prio()) -> classy_hook:hook().
 on_node_init(Hook, Prio) ->
@@ -170,7 +172,7 @@ on_create_site(Hook, Prio) ->
 on_site_status_change(Hook, Prio) ->
   classy_hook:insert(?on_site_status_change, Hook, Prio).
 
-%% @doc Register a hook that is executed a site joins or leaves a cluster.
+%% @doc Register a hook that is executed when a site joins or leaves a cluster.
 -spec on_membership_change(membership_change_hook(), classy_hook:prio()) -> classy_hook:hook().
 on_membership_change(Hook, Prio) ->
   classy_hook:insert(?on_membership_change, Hook, Prio).

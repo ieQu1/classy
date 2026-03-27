@@ -1,11 +1,11 @@
 classy
 =====
 
-An application that helps managing a cluster of Erlang nodes.
+An application that helps manage a cluster of Erlang nodes.
 
 # Concepts
 
-- Site ID: a random unique identifier of the node that persists between the restarts and host name changes.
+- Site ID: a random unique identifier of the node that persists between restarts and host name changes.
 - Cluster ID: a random unique identifier of the cluster.
 - Run level: global system state derived from the configuration and the number of peers.
   There are the following run levels:
@@ -22,8 +22,8 @@ An application that helps managing a cluster of Erlang nodes.
 
 Type: `mfa()`.
 
-A callback that is classy executes during startup.
-It allows business application to set up other hooks using a more type-safe API.
+A callback that classy executes during startup.
+It allows business applications to set up other hooks using a more type-safe API.
 
 ## `classy.table_dir`
 
@@ -94,11 +94,11 @@ Note: cleanup procedure may lead to the following situation:
 
 1. Site A goes down
 2. Site B kicks A
-3. Information about event 2 propagates through out the cluster.
+3. Information about event 2 propagates throughout the cluster.
 4. Cleanup. All active peers delete data about A.
 5. A goes back up
 
-Since at step 4 we removed the data about event 2., A will reappear in the cluster.
+Since at step 4 we removed the data about event 2, A will reappear in the cluster.
 
 So `forget_timeout` should be set to a fairly large value to make sure it doesn't cover nodes that can go back online.
 
