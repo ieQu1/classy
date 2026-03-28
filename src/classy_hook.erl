@@ -11,6 +11,7 @@
         , unhook/1
         , foreach/2
         , all/2
+        , first_match/2
         ]).
 
 -export_type([ hookpoint/0
@@ -19,7 +20,7 @@
              ]).
 
 -include("classy_internal.hrl").
--include_lib("snabbkaffe/include/snabbkaffe.hrl").
+-include_lib("snabbkaffe/include/trace.hrl").
 
 %%================================================================================
 %% Type declarations
@@ -118,7 +119,7 @@ init() ->
              })
     end,
     -100),
-  %% User initializaiton:
+  %% User initialization:
   case application:get_env(classy, setup_hooks) of
     {ok, {Mod, Func, Args}} ->
       apply(Mod, Func, Args),
@@ -147,15 +148,7 @@ unhook(Key) ->
 foreach(Hookpoint, Args) ->
   lists:foreach(
     fun(Hook) ->
-        try apply(Hook, Args)
-        catch
-          EC:Err:Stack ->
-            logger:warning(#{ EC => Err
-                            , stack => Stack
-                            , hook => Hookpoint
-                            , reason => classy_hook_failure
-                            })
-        end
+        safe_apply(Hookpoint, Hook, Args)
     end,
     hooks(Hookpoint)).
 
@@ -168,23 +161,35 @@ all(Hookpoint, Args) ->
   try
     lists:foreach(
       fun(Hook) ->
-          try apply(Hook, Args) of
-            ok -> ok;
-            {error, Err} -> throw({found, Err})
-          catch
-            EC:Err:Stack ->
-              logger:warning(#{ EC => Err
-                              , stack => Stack
-                              , hook => Hookpoint
-                              , reason => classy_hook_failure
-                              }),
-              throw({found, "Callback crashed"})
+          case safe_apply(Hookpoint, Hook, Args) of
+            {ok, ok}           -> ok;
+            {ok, {error, Err}} -> throw({found, Err});
+            {ok, Res}          -> throw({found, {invalid_result, Res}});
+            error              -> throw({found, callback_crashed})
           end
       end,
       hooks(Hookpoint)),
     ok
   catch
     {found, Err} -> {error, Err}
+  end.
+
+%% @doc Return result of the first hook that returned `{ok, _}' for
+%% a given set of arguments.
+-spec first_match(hookpoint(), list()) -> {ok, _Val} | undefined.
+first_match(Hookpoint, Args) ->
+  try
+    lists:foreach(
+      fun(Hook) ->
+          case safe_apply(Hookpoint, Hook, Args) of
+            {ok, {ok, Val}} -> throw({found, Val});
+            _               -> ok
+          end
+      end,
+      hooks(Hookpoint)),
+    undefined
+  catch
+    {found, Err} -> {ok, Err}
   end.
 
 %%================================================================================
@@ -197,3 +202,18 @@ hooks(Hookpoint) ->
        , ['$1']
        },
   ets:select(?tab, [MS]).
+
+-spec safe_apply(hookpoint(), fun(), list()) -> {ok, _Val} | error.
+safe_apply(HookPoint, Fun, A) ->
+  try
+    {ok, apply(Fun, A)}
+  catch
+    EC:Err:Stack ->
+      ?tp(warning, classy_hook_failure,
+          #{ EC        => Err
+           , stack     => Stack
+           , hook      => Fun
+           , hookpoint => HookPoint
+           }),
+      error
+  end.
