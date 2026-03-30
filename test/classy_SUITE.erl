@@ -469,6 +469,8 @@ no_unexpected_events(Trace) ->
         [ ?classy_unknown_event
         , ?classy_abnormal_exit
         , classy_table_aborted_compaction
+        , classy_hook_failure
+        , classy_discovery_failure
         ],
         Trace)).
 

@@ -112,6 +112,22 @@ Unit: ms.
 
 Autoclean check interval.
 
+## `classy.discovery_strategy`
+
+Type: `{atom(), ModuleOptions}`.
+
+Peer discovery method.
+
+## `classy.discovery_interval`
+
+Type: `pos_integer()`.
+
+Unit: ms.
+
+Default: 5_000.
+
+Peer discovery retry interval.
+
 # Setting default site and cluster
 
 By default, classy initializes site to a random value,
