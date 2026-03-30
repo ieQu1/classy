@@ -13,6 +13,7 @@
         , the_site/0
         , the_cluster/0
         , nodes/1
+        , peer_info/0
 
         , at_lower_level/2
         ]).
@@ -144,6 +145,19 @@ nodes(Query) ->
        , ['$1']
        },
   ets:select(?site_info, [MS]).
+
+-spec peer_info() -> #{classy:site() => classy:peer_info()}.
+peer_info() ->
+  ets:foldl(
+    fun(#classy_kv{k = Site, v = #site_info{node = Node, isup = IsUp, last_update = LU}}, Acc) ->
+        Info = #{ node        => Node
+                , up          => IsUp
+                , last_update => LU
+                },
+        Acc#{Site => Info}
+    end,
+    #{},
+    ?site_info).
 
 %%================================================================================
 %% behavior callbacks

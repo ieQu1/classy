@@ -54,6 +54,7 @@ adjust_time_s_skew(RemoteTimeS, Val) ->
 -ifndef(CONCUERROR).
 
 %% @doc Return Unix time in seconds.
+-spec time_s() -> unix_time_s().
 time_s() ->
   os:system_time(second).
 

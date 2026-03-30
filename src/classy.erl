@@ -11,7 +11,8 @@
 -module(classy).
 
 %% API:
--export([ join_node/2
+-export([ info/0
+        , join_node/2
         , kick_site/2
         , kick_node/2
         , sites/0
@@ -30,11 +31,16 @@
         , pre_kick/2
         , post_kick/2
         , pre_autoclean/2
+        , pre_autocluster/2
         , run_level/2
+        , enrich_site_info/2
         ]).
 
 -export_type([ cluster_id/0
              , site/0
+
+             , peer_info/0
+             , info/0
 
              , run_level/0
              , site_status_hook/0
@@ -52,6 +58,19 @@
 
 -type site() :: binary().
 
+-type peer_info() ::
+        #{ node        := node() | undefined
+         , up          := boolean()
+         , last_update := classy_lib:unix_time_s()
+         }.
+
+-type info() ::
+        #{ cluster := cluster_id() | undefined
+         , site    := site() | undefined
+         , peers   := #{site() => peer_info()}
+         , atom()  => _
+         }.
+
 -type site_status_hook() :: fun((cluster_id(), _Local :: site(), _Up :: boolean()) -> _).
 
 -type membership_change_hook() :: fun((cluster_id(), _Local :: site(), _Remote :: site(), _IsMember :: boolean()) -> _).
@@ -59,8 +78,9 @@
 -type join_intent() :: join
                      | _.
 
--type kick_intent() :: join   %% Intent set by system when site leaves the cluster to join another one
-                     | kicked %% Intent set by system when site is kicked by a third party
+-type kick_intent() :: join       %% Intent set by system when site leaves the cluster to join another one
+                     | kicked     %% Intent set by system when site is kicked by a third party
+                     | autoclean  %% Intent set by the system when the site is kicked by autoclean
                      | _.
 
 -type run_level() :: stopped | single | cluster.
@@ -68,6 +88,22 @@
 %%================================================================================
 %% API functions
 %%================================================================================
+
+-spec info() -> info().
+info() ->
+  case classy_node:the_cluster() of
+    {ok, MaybeCluster} -> ok;
+    _                  -> MaybeCluster = undefined
+  end,
+  case classy_node:the_site() of
+    {ok, MaybeSite} -> ok;
+    _               -> MaybeSite = undefined
+  end,
+  Acc = #{ cluster => MaybeCluster
+         , site    => MaybeSite
+         , peers   => classy_node:peer_info()
+         },
+  classy_hook:fold(?on_enrich_site_info, [], Acc).
 
 %%--------------------------------------------------------------------------------
 %% Cluster management
@@ -234,6 +270,16 @@ post_kick(Hook, Prio) ->
 pre_autoclean(Hook, Prio) ->
   classy_hook:insert(?on_pre_autoclean, Hook, Prio).
 
+%% @doc Register a hook that runs before autocluster.
+%%
+%% WARNING: this hook cannot have side effects.
+-spec pre_autocluster(
+        fun(([node()]) -> ok | {error, _}),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
+pre_autocluster(Hook, Prio) ->
+  classy_hook:insert(?on_pre_autocluster, Hook, Prio).
+
 %% @doc Register a hook that is executed on change of the run level of
 %% the local site.
 -spec run_level(
@@ -242,6 +288,15 @@ pre_autoclean(Hook, Prio) ->
        ) -> classy_hook:hook().
 run_level(Hook, Prio) ->
   classy_hook:insert(?on_change_run_level, Hook, Prio).
+
+%% @doc Register a hook that is executed on change of the run level of
+%% the local site.
+-spec enrich_site_info(
+        fun((info()) -> info()),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
+enrich_site_info(Hook, Prio) ->
+  classy_hook:insert(?on_enrich_site_info, Hook, Prio).
 
 %%================================================================================
 %% Internal exports

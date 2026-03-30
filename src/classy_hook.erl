@@ -10,6 +10,7 @@
         , insert/3
         , unhook/1
         , foreach/2
+        , fold/3
         , all/2
         , first_match/2
         ]).
@@ -143,13 +144,31 @@ unhook(Key) ->
 
 %% @doc Execute all functions hooked into `Hookpoint'.
 %%
-%% Errors are ignored (logged)
+%% Errors are ignored (logged).
 -spec foreach(hookpoint(), list()) -> ok.
 foreach(Hookpoint, Args) ->
   lists:foreach(
     fun(Hook) ->
         safe_apply(Hookpoint, Hook, Args)
     end,
+    hooks(Hookpoint)).
+
+%% @doc Fold over all functions registered in `Hookpoint'.
+%% Accumulator argument is appended to the `Args' list.
+%%
+%% Errors are ignored (logged).
+-spec fold(hookpoint(), list(), A) -> A.
+fold(Hookpoint, Args, Acc0) ->
+  lists:foldl(
+    fun(Hook, Acc1) ->
+        case safe_apply(Hookpoint, Hook, Args ++ [Acc1]) of
+          {ok, Acc} ->
+            Acc;
+          error ->
+            Acc1
+        end
+    end,
+    Acc0,
     hooks(Hookpoint)).
 
 %% @doc Ensure that all functions hooked into `Hookpoint' return `ok'.
