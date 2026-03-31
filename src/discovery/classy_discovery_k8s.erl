@@ -30,7 +30,7 @@
 
 -define(SERVICE_ACCOUNT_PATH, "/var/run/secrets/kubernetes.io/serviceaccount/").
 
--define(LOG(Level, Format, Args), logger:Level("Ekka(k8s): " ++ Format, Args)).
+-define(LOG(Level, Format, Args), logger:Level("Classy(k8s): " ++ Format, Args)).
 
 %%--------------------------------------------------------------------
 %% classy_discovery_strategy callbacks

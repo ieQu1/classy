@@ -63,7 +63,7 @@
         , v3_unregister/1
         ]).
 
--define(LOG(Level, Format, Args), logger:Level("Ekka(etcd): " ++ Format, Args)).
+-define(LOG(Level, Format, Args), logger:Level("Classy(etcd): " ++ Format, Args)).
 
 start_link(Options) ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, Options, []).
@@ -100,6 +100,7 @@ etcd_apply(Action, Options) ->
 %%--------------------------------------------------------------------
 %% v2
 %%--------------------------------------------------------------------
+
 etcd_v2(Action, Options) ->
   Function = list_to_atom("v2_" ++ atom_to_list(Action)),
   erlang:apply(?MODULE, Function, [Options]).
@@ -141,7 +142,7 @@ v2_unlock(Options) ->
   end.
 
 v2_register(Options) ->
-  ?tp(ekka_cluster_etcd_v2_register, #{}),
+  ?tp(classy_discovery_etcd_v2_register, #{}),
   case etcd_set_node_key(Options) of
     {ok, _Response} ->
       ensure_node_ttl(Options);
@@ -150,7 +151,7 @@ v2_register(Options) ->
   end.
 
 v2_unregister(Options) ->
-  ok = ekka_cluster_sup:stop_child(ekka_node_ttl),
+  ok = classy_autocluster_sup:stop_child(ekka_node_ttl),
   case etcd_del_node_key(Options) of
     {ok, _Response} ->
       ok;
@@ -166,7 +167,7 @@ extract_nodes(Response) ->
 ensure_node_ttl(Options) ->
   Ttl = proplists:get_value(node_ttl, Options),
   MFA = {?MODULE, etcd_set_node_key, [Options]},
-  case ekka_cluster_sup:start_child(ekka_node_ttl, [Ttl, MFA]) of
+  case classy_autocluster_sup:start_child(ekka_node_ttl, [Ttl, MFA]) of
     {ok, _Pid}                       -> ok;
     {error, {already_started, _Pid}} -> ok;
     Err = {error, _}                 -> Err
@@ -275,20 +276,20 @@ v3_lock(#state{prefix = Prefix, lease_id = ID}) ->
   Context1 = eetcd_lock:with_lease(eetcd_lock:with_name(Context, Name), ID),
   case eetcd_lock:lock(Context1) of
     {ok, #{key := LockKey}} ->
-      persistent_term:put(ekka_cluster_etcd_lock_key, LockKey),
+      persistent_term:put(classy_discovery_etcd_lock_key, LockKey),
       ok;
     Error ->
       Error
   end.
 
 v3_unlock(_) ->
-  case persistent_term:get(ekka_cluster_etcd_lock_key, undefined) of
+  case persistent_term:get(classy_discovery_etcd_lock_key, undefined) of
     undefined ->
       {error, lock_lose};
     LockKey ->
       case eetcd_lock:unlock(?MODULE, LockKey) of
         {ok, _} ->
-          persistent_term:erase(ekka_cluster_etcd_lock_key),
+          persistent_term:erase(classy_discovery_etcd_lock_key),
           ok;
         Error ->
           Error
@@ -296,7 +297,7 @@ v3_unlock(_) ->
   end.
 
 v3_register(#state{prefix = Prefix ,lease_id = ID}) ->
-  ?tp(ekka_cluster_etcd_v3_register, #{prefix => Prefix, lease_id => ID}),
+  ?tp(classy_discovery_etcd_v3_register, #{prefix => Prefix, lease_id => ID}),
   Context = v3_node_context(Prefix, ID),
   case eetcd_kv:put(Context) of
     {ok, _Response} ->
