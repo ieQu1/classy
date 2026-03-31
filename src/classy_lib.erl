@@ -13,6 +13,7 @@
         , n_sites/0
         , time_s/0
         , adjust_time_s_skew/2
+        , discovery_strategy/0
 
         , wakeup_after/3
         , cancel_wakeup/1
@@ -43,6 +44,10 @@ rpc_timeout() ->
 %% @doc Read `n_sites' environment variable (with default)
 n_sites() ->
   application:get_env(classy, n_sites, 1).
+
+%% @doc Read `discovery_strategy' environment variable (with default)
+discovery_strategy() ->
+  application:get_env(classy, discovery_strategy, {manual, []}).
 
 %% @doc Adjust a local timestamp `Val' to the remote nodes's clock,
 %% given the remote's "current" time `RemoteTimeS' at the time of the

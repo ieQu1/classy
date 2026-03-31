@@ -94,10 +94,10 @@ init(#top{}) ->
                , type     => worker
                },
   Autocluster = #{ id       => autocluster
-                 , start    => {classy_autocluster, start_link, []}
-                 , shutdown => 10_000
+                 , start    => {classy_autocluster_sup, start_link, []}
+                 , shutdown => infinity
                  , restart  => permanent
-                 , type     => worker
+                 , type     => supervisor
                  },
   Children = [ sup_spec(#{id => ?TABLE_SUP, start => {?MODULE, start_link_table_sup, []}})
              , sup_spec(#{id => ?MEMBERSHIP_SUP, start => {?MODULE, start_link_membership_sup, []}})
