@@ -37,91 +37,97 @@
 %%--------------------------------------------------------------------
 
 discover(Options) ->
-    Server = get_value(apiserver, Options),
-    Service = get_value(service_name, Options),
-    App = resolve_name(get_value(app_name, Options, undefined)),
-    AddrType = get_value(address_type, Options, ip),
-    Namespace = get_value(namespace, Options, "default"),
-    Suffix = get_value(suffix, Options, ""),
-    case k8s_service_get(Server, Service, Namespace) of
-        {ok, Response} ->
-            Addresses = extract_addresses(AddrType, Response),
-            {ok, [node_name(App, Addr, Service, AddrType, Namespace, Suffix) || Addr <- Addresses]};
-        {error, Reason} ->
-            {error, Reason}
-    end.
-
-resolve_name(undefined) ->
-    [Name | _] = string:tokens(atom_to_list(node()), "@"),
-    Name;
-resolve_name(Name) ->
-    Name.
+  Defaults = #{ app_name     => undefined
+              , address_type => ip
+              , namespace    => "default"
+              , suffix       => ""
+              },
+  #{ apiserver    := Server
+   , service_name := Service
+   , app_name     := App0
+   , address_type := AddrType
+   , namespace    := Namespace
+   , suffix       := Suffix
+   } = maps:merge(Defaults, Options),
+  App = case App0 of
+          undefined -> classy_autocluster:app_name();
+          _         -> App0
+        end,
+  case k8s_service_get(Server, Service, Namespace) of
+    {ok, Response} ->
+      Addresses = extract_addresses(AddrType, Response),
+      {ok, [node_name(App, Addr, Service, AddrType, Namespace, Suffix) || Addr <- Addresses]};
+    {error, Reason} ->
+      {error, Reason}
+  end.
 
 node_name(App, Addr, Service, hostname, Namespace, Suffix) when length(Suffix) > 0 ->
-    list_to_atom(lists:concat([App, "@", binary_to_list(Addr), ".", Service, ".", Namespace, ".", Suffix]));
+  list_to_atom(lists:concat([App, "@", binary_to_list(Addr), ".", Service, ".", Namespace, ".", Suffix]));
 
 node_name(App, Addr, _Service, dns, Namespace, Suffix) when length(Suffix) > 0 ->
-    list_to_atom(lists:concat([App, "@", binary_to_list(Addr), ".", Namespace, ".", Suffix]));
+  list_to_atom(lists:concat([App, "@", binary_to_list(Addr), ".", Namespace, ".", Suffix]));
 
 node_name(App, Addr, _, _, _, _) ->
-    list_to_atom(App ++ "@" ++ binary_to_list(Addr)).
+  list_to_atom(App ++ "@" ++ binary_to_list(Addr)).
 
 lock(_Options) ->
-    ignore.
+  ignore.
 
 unlock(_Options) ->
-    ignore.
+  ignore.
 
 register(_Options) ->
-    ignore.
+  ignore.
 
 unregister(_Options) ->
-    ignore.
+  ignore.
 
 %%--------------------------------------------------------------------
 %% Internal functions
 %%--------------------------------------------------------------------
 
 k8s_service_get(Server, Service, Namespace) ->
-    Headers = [{<<"Authorization">>, iolist_to_binary(["Bearer ", token()])}],
-    HttpOpts = case filelib:is_file(cert_path()) of
-                   true  -> [{ssl_options, [{cacertfile, cert_path()}]}];
-                   false -> [{ssl_options, [{verify, verify_none}]}]
-               end,
-    classy_httpc:get(Server, service_path(Service, Namespace), [], Headers, HttpOpts).
+  Headers = [{<<"Authorization">>, iolist_to_binary(["Bearer ", token()])}],
+  HttpOpts = case filelib:is_file(cert_path()) of
+                 true  -> [{ssl_options, [{cacertfile, cert_path()}]}];
+                 false -> [{ssl_options, [{verify, verify_none}]}]
+             end,
+  classy_httpc:get(Server, service_path(Service, Namespace), [], Headers, HttpOpts).
 
 service_path(Service, Namespace) ->
-    lists:concat(["api/v1/namespaces/", Namespace, "/endpoints/", Service]).
+  lists:concat(["api/v1/namespaces/", Namespace, "/endpoints/", Service]).
 
 % namespace() ->
 %     binary_to_list(trim(read_file("namespace", <<"default">>))).
 
 token() ->
-    trim(read_file("token", <<"">>)).
+  trim(read_file("token", <<"">>)).
 
-cert_path() -> ?SERVICE_ACCOUNT_PATH ++ "/ca.crt".
+cert_path() ->
+  ?SERVICE_ACCOUNT_PATH ++ "/ca.crt".
 
 read_file(Name, Default) ->
-    case file:read_file(?SERVICE_ACCOUNT_PATH ++ Name) of
-        {ok, Data} -> Data;
-        {error, Error} ->
-            ?LOG(error, "Cannot read ~s: ~p", [Name, Error]),
-            Default
-    end.
+  case file:read_file(?SERVICE_ACCOUNT_PATH ++ Name) of
+    {ok, Data} ->
+      Data;
+    {error, Error} ->
+      ?LOG(error, "Cannot read ~s: ~p", [Name, Error]),
+      Default
+  end.
 
-trim(S) -> binary:replace(S, <<"\n">>, <<>>).
+trim(S) ->
+  binary:replace(S, <<"\n">>, <<>>).
 
 extract_addresses(Type, Response) ->
-    lists:flatten(
-        [[extract_host(Type, Addr)
-            || Addr <- maps:get(<<"addresses">>, Subset, [])]
-            || Subset <- maps:get(<<"subsets">>, Response, [])]).
+  lists:flatten(
+    [[extract_host(Type, Addr) || Addr <- maps:get(<<"addresses">>, Subset, [])]
+     || Subset <- maps:get(<<"subsets">>, Response, [])]).
 
 extract_host(ip, Addr) ->
-    maps:get(<<"ip">>, Addr);
+  maps:get(<<"ip">>, Addr);
 
 extract_host(hostname, Addr) ->
-    maps:get(<<"hostname">>, Addr);
+  maps:get(<<"hostname">>, Addr);
 
 extract_host(dns, Addr) ->
-    binary:replace(maps:get(<<"ip">>, Addr), <<".">>, <<"-">>, [global]).
+  binary:replace(maps:get(<<"ip">>, Addr), <<".">>, <<"-">>, [global]).

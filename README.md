@@ -143,14 +143,14 @@ Discover peers via DNS query.
 
 - `name`: Domain name
 - `type`: type of the DNS record (default: `a`)
-- `app`: Node name prefix (default: `undefined`)
+- `app`: Node name prefix (default: `classy_autocluster:app_name()`)
 
 Node names are derived using the following template: `App@Hostname`
 where `App` is the value of `app` configuration option,
 and `Hostname` is derived from the DNS response.
 
 When `a` or `aaaa` type is used, hostnames become IP addresses.
-It's recommended to use SRV records.d
+It's recommended to use SRV records.
 
 ### K8S
 

@@ -12,6 +12,7 @@
         , enable/0
         , disable/0
         , decide_cluster/1
+        , app_name/0
         ]).
 
 %% behavior callbacks:
@@ -49,6 +50,49 @@ enable() ->
 -spec disable() -> ok.
 disable() ->
   gen_server:cast(?SERVER, #cast_enable{enable = false}).
+
+%% @doc Helper function that selects a cluster from `class:cluster_info()' according to the following rules:
+%%
+%% <ol>
+%% <li>If there are partitioned clusters, do not join.</li>
+%% <li>Try to find a cluster with the largest number of peers</li>
+%% <li>If the number of peers is equal in all clusters, join the cluster with the smallest ID</li>
+%% </ol>
+-spec decide_cluster(classy:cluster_info()) ->
+        {ok, classy:cluster_id(), [{classy:site(), node()}]} |
+        undefined.
+decide_cluster(#{clusters := Clusters}) ->
+  try
+    Ret = maps:fold(
+            fun(Cluster, [Sites], undefined) ->
+                {Cluster, length(Sites), Sites};
+               (Cluster, [Sites], {OldCluster, NOldSites, OldSites}) ->
+                NSites = length(Sites),
+                if NSites > NOldSites; (NSites =:= NOldSites andalso Cluster < OldCluster) ->
+                    {Cluster, NSites, Sites};
+                   true ->
+                    {OldCluster, NOldSites, OldSites}
+                end;
+               (_Cluster, _, _Acc) ->
+                throw(partition)
+            end,
+            undefined,
+            Clusters),
+    case Ret of
+      {Cluster, _, Sites} ->
+        {ok, Cluster, Sites};
+      undefined ->
+        undefined
+    end
+  catch
+    partition -> undefined
+  end.
+
+%% @doc Helper function that returns prefix of the local node name.
+-spec app_name() -> string().
+app_name() ->
+  [Name | _] = string:tokens(atom_to_list(node()), "@"),
+  Name.
 
 %%================================================================================
 %% behavior callbacks
@@ -105,43 +149,6 @@ terminate(Reason, _S) ->
          , reason => Reason
          }),
   ok.
-
-%% @doc Helper function that selects a cluster from `class:cluster_info()' according to the following rules:
-%%
-%% <ol>
-%% <li>If there are partitioned clusters, do not join.</li>
-%% <li>Try to find a cluster with the largest number of peers</li>
-%% <li>If the number of peers is equal in all clusters, join the cluster with the smallest ID</li>
-%% </ol>
--spec decide_cluster(classy:cluster_info()) ->
-        {ok, classy:cluster_id(), [{classy:site(), node()}]} |
-        undefined.
-decide_cluster(#{clusters := Clusters}) ->
-  try
-    Ret = maps:fold(
-            fun(Cluster, [Sites], undefined) ->
-                {Cluster, length(Sites), Sites};
-               (Cluster, [Sites], {OldCluster, NOldSites, OldSites}) ->
-                NSites = length(Sites),
-                if NSites > NOldSites; (NSites =:= NOldSites andalso Cluster < OldCluster) ->
-                    {Cluster, NSites, Sites};
-                   true ->
-                    {OldCluster, NOldSites, OldSites}
-                end;
-               (_Cluster, _, _Acc) ->
-                throw(partition)
-            end,
-            undefined,
-            Clusters),
-    case Ret of
-      {Cluster, _, Sites} ->
-        {ok, Cluster, Sites};
-      undefined ->
-        undefined
-    end
-  catch
-    partition -> undefined
-  end.
 
 %%================================================================================
 %% Internal exports
