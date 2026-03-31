@@ -26,16 +26,16 @@
         ]).
 
 discover(Options) ->
-    {ok, proplists:get_value(seeds, Options, [])}.
+  {ok, maps:get(seeds, Options, [])}.
 
 lock(_Options) ->
-    ignore.
+  ignore.
 
 unlock(_Options) ->
-    ignore.
+  ignore.
 
 register(_Options) ->
-    ignore.
+  ignore.
 
 unregister(_Options) ->
-    ignore.
+  ignore.

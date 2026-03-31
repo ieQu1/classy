@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019-2022, 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2019-2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -27,31 +27,35 @@
         ]).
 
 discover(Options) ->
-    DomainName = proplists:get_value(name, Options),
-    NodeName = proplists:get_value(app, Options, undefined),
-    Type = proplists:get_value(type, Options, a),
-    {ok, [node_name(NodeName, Host) || Host <- resolve_hosts(DomainName, Type)]}.
+  Defaults = #{ app  => undefined
+              , type => a
+              },
+  #{ name := DomainName
+   , app  := NodeName
+   , type := Type
+   } = maps:merge(Defaults, Options),
+  {ok, [node_name(NodeName, Host) || Host <- resolve_hosts(DomainName, Type)]}.
 
 resolve_hosts(DomainName, Type) when Type =:= a; Type =:= aaaa ->
-    [inet:ntoa(IP) || IP <- inet_res:lookup(DomainName, in, Type)];
+  [inet:ntoa(IP) || IP <- inet_res:lookup(DomainName, in, Type)];
 resolve_hosts(DomainName, srv) ->
-    Records = inet_res:lookup(DomainName, in, srv),
-    lists:usort(lists:map(fun({_, _, _, Host}) -> Host end, Records)).
+  Records = inet_res:lookup(DomainName, in, srv),
+  lists:usort(lists:map(fun({_, _, _, Host}) -> Host end, Records)).
 
 node_name(undefined, Host) ->
-    [Name | _] = string:tokens(atom_to_list(node()), "@"),
-    node_name(Name, Host);
+  [Name | _] = string:tokens(atom_to_list(node()), "@"),
+  node_name(Name, Host);
 node_name(NodeName, Host) ->
-    list_to_atom(lists:concat([NodeName, "@", Host])).
+  list_to_atom(lists:concat([NodeName, "@", Host])).
 
 lock(_Options) ->
-    ignore.
+  ignore.
 
 unlock(_Options) ->
-    ignore.
+  ignore.
 
 register(_Options) ->
-    ignore.
+  ignore.
 
 unregister(_Options) ->
-    ignore.
+  ignore.

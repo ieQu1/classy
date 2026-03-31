@@ -26,7 +26,7 @@
 %% Callback and type declarations
 %%================================================================================
 
--type options() :: proplists:proplist().
+-type options() :: term().
 
 -callback discover(options()) -> {ok, [node()]} | {error, term()}.
 
