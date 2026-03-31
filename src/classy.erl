@@ -12,6 +12,7 @@
 
 %% API:
 -export([ info/0
+        , clusters/1
         , join_node/2
         , kick_site/2
         , kick_node/2
@@ -41,6 +42,7 @@
 
              , peer_info/0
              , info/0
+             , cluster_info/0
 
              , run_level/0
              , site_status_hook/0
@@ -71,11 +73,20 @@
          , atom()  => _
          }.
 
+%% Mapping from cluster ID to cluster partitions.
+%% Values in the map are lists, where each element is a distinct view of the cluster.
+%%
+%% In a fully consistent cluster, this list should contain only one element.
+-type cluster_info() ::
+        #{ cluster_id() => [[{site(), node()}]]
+         }.
+
 -type site_status_hook() :: fun((cluster_id(), _Local :: site(), _Up :: boolean()) -> _).
 
 -type membership_change_hook() :: fun((cluster_id(), _Local :: site(), _Remote :: site(), _IsMember :: boolean()) -> _).
 
 -type join_intent() :: join
+                     | autocluster
                      | _.
 
 -type kick_intent() :: join       %% Intent set by system when site leaves the cluster to join another one
@@ -89,8 +100,10 @@
 %% API functions
 %%================================================================================
 
+%% @doc Provide general information about the local node.
 -spec info() -> info().
 info() ->
+  %% Note: this is an RPC target.
   case classy_node:the_cluster() of
     {ok, MaybeCluster} -> ok;
     _                  -> MaybeCluster = undefined
@@ -104,6 +117,31 @@ info() ->
          , peers   => classy_node:peer_info()
          },
   classy_hook:fold(?on_enrich_site_info, [], Acc).
+
+%% @doc Get information about clusters and their partitions from a given set of nodes.
+-spec clusters([node()]) -> {cluster_info(), BadNodes}
+  when BadNodes :: [node()].
+clusters(Nodes) ->
+  SiteInfos = erpc:multicall(
+                Nodes,
+                classy_node, cluster_info, [],
+                classy_lib:rpc_timeout()),
+  lists:foldl(
+    fun({_Node, {ok, Cluster, Peers0}}, {AccClusters0, AccBadNodes}) ->
+        Peers = lists:sort(Peers0),
+        AccClusters = maps:update_with(
+                        Cluster,
+                        fun(P0) ->
+                            lists:usort([Peers | P0])
+                        end,
+                        [Peers],
+                        AccClusters0),
+        {AccClusters, AccBadNodes};
+       ({Node, _}, {AccClusters, AccBadNodes}) ->
+        {AccClusters, [Node | AccBadNodes]}
+    end,
+    #{},
+    lists:zip(Nodes, SiteInfos)).
 
 %%--------------------------------------------------------------------------------
 %% Cluster management

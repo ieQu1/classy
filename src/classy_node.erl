@@ -22,7 +22,9 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([hello/0]).
+-export([ hello/0
+        , cluster_info/0
+        ]).
 
 -export_type([run_level_atom/0]).
 
@@ -281,6 +283,20 @@ hello() ->
   else
     _ ->
       {error, not_in_cluster}
+  end.
+
+%% @doc RPC target
+-spec cluster_info() -> {ok, classy:cluster_id(), [{classy:site(), node()}]} | error.
+cluster_info() ->
+  maybe
+    {ok, Cluster} ?= the_cluster(),
+    {ok, Site} ?= the_site(),
+    Peers = classy_membership:members(Cluster, Site),
+    Nodes = classy_membership:node_of_site(Cluster, Site),
+    {ok, Cluster, [{I, maps:get(I, Nodes, undefined)} || I <- Peers]}
+  else
+    _ ->
+      error
   end.
 
 %%================================================================================

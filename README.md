@@ -112,6 +112,12 @@ Unit: ms.
 
 Autoclean check interval.
 
+## `classy.discovery_method`
+
+Type: `{atom(), ModuleOptions}`.
+
+Peer discovery method.
+
 ## `classy.discovery_interval`
 
 Type: `pos_integer()`.
