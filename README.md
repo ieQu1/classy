@@ -112,7 +112,7 @@ Unit: ms.
 
 Autoclean check interval.
 
-## `classy.discovery_method`
+## `classy.discovery_strategy`
 
 Type: `{atom(), ModuleOptions}`.
 

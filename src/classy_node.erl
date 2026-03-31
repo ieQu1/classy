@@ -8,7 +8,7 @@
 %% API:
 -export([ start_link/0
         , maybe_init_the_site/1
-        , join_node/2
+        , join_node/3
         , kick_site/2
         , the_site/0
         , the_cluster/0
@@ -43,7 +43,11 @@
 -define(the_site, the_site).
 -define(the_cluster, the_cluster).
 
--record(call_join, {node :: node(), intent :: term()}).
+-record(call_join,
+        { node :: node()
+        , intent :: term()
+        , cluster :: classy:cluster_id() | any
+        }).
 -record(call_kick, {site :: classy:site(), intent :: term()}).
 -record(cast_membership_change,
         { cluster :: classy:cluster_id()
@@ -97,15 +101,15 @@ the_site() ->
 %% @doc Join to the cluster that `Node' belongs to.
 %%
 %% This function performs all necessary checks before making any changes.
--spec join_node(node(), _Intent) -> ok | {error, _}.
-join_node(Node, Intent) ->
+-spec join_node(node(), _Intent, classy:cluster_id() | any) -> ok | {error, _}.
+join_node(Node, Intent, ExpectedCluster) ->
   case node() of
     Node ->
       ok;
     _ ->
       gen_server:call(
         ?SERVER,
-        #call_join{node = Node, intent = Intent},
+        #call_join{node = Node, intent = Intent, cluster = ExpectedCluster},
         infinity)
   end.
 
@@ -191,8 +195,8 @@ init(_) ->
   end.
 
 %% @private
-handle_call(#call_join{node = Node, intent = Intent}, _From, S0) ->
-  case handle_join(Node, S0, Intent) of
+handle_call(#call_join{} = Call, _From, S0) ->
+  case handle_join(S0, Call) of
     {ok, S} ->
       {reply, ok, S};
     Err ->
@@ -358,19 +362,26 @@ handle_kick(Cluster, Local, Target, Intent) ->
       Err
   end.
 
-handle_join(Node, S, Intent) ->
+handle_join(S, Call) ->
+  #call_join{ node    = Node
+            , cluster = ExpectedCluster
+            , intent  = Intent
+            } = Call,
   case rpc:call(Node, ?MODULE, hello, [], classy_lib:rpc_timeout()) of
     #{ site := Remote
      , cluster := Cluster
      , pid := _RemotePid
      , mem_data := MemData
-     } ->
+     } when Cluster =:= ExpectedCluster;
+            ExpectedCluster =:= any ->
       case classy_hook:all(?on_pre_join, [Cluster, Remote, Node, Intent]) of
         ok ->
           do_join_node(Node, Cluster, Remote, MemData, S);
         {error, _} = Err ->
           Err
       end;
+    #{cluster := Cluster} ->
+      {error, {cluster_changed, #{ExpectedCluster => Cluster}}};
     Err ->
       {error, Err}
   end.

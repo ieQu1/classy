@@ -78,7 +78,8 @@
 %%
 %% In a fully consistent cluster, this list should contain only one element.
 -type cluster_info() ::
-        #{ cluster_id() => [[{site(), node()}]]
+        #{ clusters  := #{cluster_id() => [[{site(), node()}]]}
+         , bad_nodes := [node()]
          }.
 
 -type site_status_hook() :: fun((cluster_id(), _Local :: site(), _Up :: boolean()) -> _).
@@ -118,30 +119,34 @@ info() ->
          },
   classy_hook:fold(?on_enrich_site_info, [], Acc).
 
-%% @doc Get information about clusters and their partitions from a given set of nodes.
--spec clusters([node()]) -> {cluster_info(), BadNodes}
-  when BadNodes :: [node()].
+%% @doc Gather cluster views from a given set of nodes
+%% and aggregate this information to derive partitions.
+-spec clusters([node()]) -> cluster_info().
 clusters(Nodes) ->
   SiteInfos = erpc:multicall(
                 Nodes,
                 classy_node, cluster_info, [],
                 classy_lib:rpc_timeout()),
-  lists:foldl(
-    fun({_Node, {ok, Cluster, Peers0}}, {AccClusters0, AccBadNodes}) ->
-        Peers = lists:sort(Peers0),
-        AccClusters = maps:update_with(
-                        Cluster,
-                        fun(P0) ->
-                            lists:usort([Peers | P0])
-                        end,
-                        [Peers],
-                        AccClusters0),
-        {AccClusters, AccBadNodes};
-       ({Node, _}, {AccClusters, AccBadNodes}) ->
-        {AccClusters, [Node | AccBadNodes]}
-    end,
-    #{},
-    lists:zip(Nodes, SiteInfos)).
+  {Clusters, BadNodes} =
+    lists:foldl(
+      fun({_Node, {ok, Cluster, Peers0}}, {AccClusters0, AccBadNodes}) ->
+          Peers = lists:sort(Peers0),
+          AccClusters = maps:update_with(
+                          Cluster,
+                          fun(P0) ->
+                              lists:usort([Peers | P0])
+                          end,
+                          [Peers],
+                          AccClusters0),
+          {AccClusters, AccBadNodes};
+         ({Node, _}, {AccClusters, AccBadNodes}) ->
+          {AccClusters, [Node | AccBadNodes]}
+      end,
+      {#{}, []},
+      lists:zip(Nodes, SiteInfos)),
+  #{ clusters  => Clusters
+   , bad_nodes => BadNodes
+   }.
 
 %%--------------------------------------------------------------------------------
 %% Cluster management
@@ -149,7 +154,7 @@ clusters(Nodes) ->
 
 -spec join_node(node(), join_intent()) -> ok | {error, _}.
 join_node(Node, Intent) ->
-  classy_node:join_node(Node, Intent).
+  classy_node:join_node(Node, Intent, any).
 
 -spec kick_site(site(), kick_intent()) -> ok | {error, _}.
 kick_site(Site, Intent) ->
@@ -309,12 +314,23 @@ pre_autoclean(Hook, Prio) ->
   classy_hook:insert(?on_pre_autoclean, Hook, Prio).
 
 %% @doc Register a hook that runs before autocluster.
+%% This hook allows the business code to pick the most appropriate cluster for automatic join.
+%%
+%% Return value:
+%%
+%% <itemize>
+%% <li>`{ok, {Cluster, [node()]}}': stop the search and join one of the returned nodes</li>
+%% <li>`{ok, undefined}': stop the search and do not join any node (abort autocluster until next retry)</li>
+%% <li>`undefined': continue the search</li>
+%% </itemize>
 %%
 %% WARNING: this hook cannot have side effects.
 -spec pre_autocluster(
-        fun(([node()]) -> ok | {error, _}),
+        fun((Candidates, cluster_info()) -> {ok, Discovered} | {ok, undefined} | undefined),
         classy_hook:prio()
-       ) -> classy_hook:hook().
+       ) -> classy_hook:hook()
+  when Candidates :: [node()],
+       Discovered :: {cluster_id(), [node()]}.
 pre_autocluster(Hook, Prio) ->
   classy_hook:insert(?on_pre_autocluster, Hook, Prio).
 

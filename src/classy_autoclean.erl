@@ -153,12 +153,6 @@ max_downtime() ->
 check_interval() ->
   application:get_env(classy, cleanup_check_interval, 30_000).
 
-
-is_reachable(Node) when Node =:= node() ->
-    true;
-is_reachable(Node) ->
-    lists:member(Node, nodes()) orelse net_adm:ping(Node) =:= pong.
-
 -spec forget_after() -> pos_integer().
 forget_after() ->
   application:get_env(classy, cleanup_check_interval, 7 * 24 * 60 * 60).

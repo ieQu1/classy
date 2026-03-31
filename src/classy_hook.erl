@@ -43,83 +43,17 @@
 init() ->
   ets:new(?tab, [named_table, ordered_set, public, {keypos, 1}]),
   %% Default initialization:
-  classy:on_node_init(
-    fun() ->
-        ?tp(classy_on_node_init,
-            #{ node => node()
-             }),
-        classy_node:maybe_init_the_site(undefined)
-    end,
-    -100),
-  classy:post_kick(
-    fun(OldCluster, Local, Intent) ->
-        ?tp(info, classy_kicked_from_cluster,
-            #{ old_cluster => OldCluster
-             , local => Local
-             , intent => Intent
-             }),
-        %% Re-initialize the local cluster upon getting kicked:
-        Intent =/= join andalso
-          classy_node:maybe_init_the_site(Local)
-    end,
-    -100),
+  classy:on_node_init(fun classy_builtin_hooks:gen_random_site_id/0, -100),
+  classy:post_kick(fun classy_builtin_hooks:maybe_reinitialize_after_kick/3, -100),
+  %% Default autocluster behavior:
+  classy:pre_autocluster(fun classy_builtin_hooks:autocluster_select_site/2, -100),
   %% Info logging:
-  classy:on_create_site(
-    fun(Site) ->
-        ?tp(info, classy_create_new_site,
-            #{ local => Site
-             })
-    end,
-    100),
-  classy:on_create_cluster(
-    fun(Cluster, Site) ->
-        ?tp(info, classy_create_new_cluster,
-            #{ cluster => Cluster
-             , local => Site
-             }),
-        ok
-    end,
-    100),
-  classy:pre_join(
-    fun(Cluster, Remote, Node, UserArg) ->
-        ?tp(debug, classy_pre_join_node,
-            #{ cluster => Cluster
-             , remote => Remote
-             , remote_node => Node
-             , user_arg => UserArg
-             }),
-        ok
-    end,
-    100),
-  classy:post_join(
-    fun(Cluster, Local) ->
-        ?tp(notice, classy_joined_cluster,
-            #{ cluster => Cluster
-             , local => Local
-             })
-    end,
-    -100),
-  classy:on_membership_change(
-    fun(Cluster, Local, Remote, Member) ->
-        Kind = case Member of
-                 true -> classy_member_join;
-                 false -> classy_member_leave
-               end,
-        ?tp(notice, Kind,
-            #{ cluster => Cluster
-             , local => Local
-             , remote => Remote
-             })
-    end,
-    100),
-  classy:run_level(
-    fun(From, To) ->
-        ?tp(info, classy_change_run_level,
-            #{ from => From
-             , to => To
-             })
-    end,
-    -100),
+  classy:on_create_site(fun classy_builtin_hooks:log_create_site/1, 100),
+  classy:on_create_cluster(fun classy_builtin_hooks:log_create_cluster/2, 100),
+  classy:pre_join(fun classy_builtin_hooks:log_pre_join/4, 100),
+  classy:post_join(fun classy_builtin_hooks:log_post_join/2, -100),
+  classy:on_membership_change(fun classy_builtin_hooks:log_membership_change/4, 100),
+  classy:run_level(fun classy_builtin_hooks:log_run_level/2, -100),
   %% User initialization:
   case application:get_env(classy, setup_hooks) of
     {ok, {Mod, Func, Args}} ->
@@ -159,17 +93,22 @@ foreach(Hookpoint, Args) ->
 %% Errors are ignored (logged).
 -spec fold(hookpoint(), list(), A) -> A.
 fold(Hookpoint, Args, Acc0) ->
-  lists:foldl(
-    fun(Hook, Acc1) ->
-        case safe_apply(Hookpoint, Hook, Args ++ [Acc1]) of
-          {ok, Acc} ->
-            Acc;
-          error ->
-            Acc1
-        end
-    end,
-    Acc0,
-    hooks(Hookpoint)).
+  try
+    lists:foldl(
+      fun(Hook, Acc1) ->
+          case safe_apply(Hookpoint, Hook, Args ++ [Acc1]) of
+            {ok, Acc} ->
+              Acc;
+            error ->
+              Acc1
+          end
+      end,
+      Acc0,
+      hooks(Hookpoint))
+  catch
+    {stop, Result} ->
+      Result
+  end.
 
 %% @doc Ensure that all functions hooked into `Hookpoint' return `ok'.
 %%
