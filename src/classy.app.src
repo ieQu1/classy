@@ -9,6 +9,10 @@
         snabbkaffe,
         gproc,
         optvar,
+        %% Discovery:
+        eetcd,
+        hackney,
+        jsone,
         %% Test harness:
         tools
     ]},

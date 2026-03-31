@@ -269,7 +269,7 @@ with_strategy(Fun) ->
 strategy_module(Strategy) ->
   case code:is_loaded(Strategy) of
     {file, _} -> Strategy; %% Provider?
-    false     -> list_to_atom("ekka_cluster_" ++  atom_to_list(Strategy))
+    false     -> list_to_atom("classy_discovery_" ++  atom_to_list(Strategy))
   end.
 
 -spec discovery_interval() -> pos_integer().
