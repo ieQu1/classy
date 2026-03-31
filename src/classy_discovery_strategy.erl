@@ -67,7 +67,7 @@ unregister(Mod, Options) ->
 %%================================================================================
 
 safe_call(Module, Function, Options) ->
-  try apply(Module, Function, Options)
+  try apply(Module, Function, [Options])
   catch
     EC:Err:Stack ->
       ?tp(warning, classy_discovery_failure,

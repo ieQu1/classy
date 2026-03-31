@@ -622,7 +622,10 @@ end_per_testcase(_TC, Cfg) ->
   snabbkaffe:stop().
 
 all() ->
-  [I || {I, 1} <- module_info(exports), I > 't_', I < 't`'].
+  all(?MODULE).
+
+all(Module) ->
+  [I || {I, 1} <- Module:module_info(exports), I > 't_', I < 't`'].
 
 wait_site_joined(WaitOnSites, Cluster, Site) ->
   lists:foreach(
