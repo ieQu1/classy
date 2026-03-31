@@ -267,10 +267,12 @@ with_strategy(Fun) ->
 
 -spec strategy_module(atom()) -> module().
 strategy_module(Strategy) ->
-  case code:is_loaded(Strategy) of
-    {file, _} -> Strategy; %% Provider?
-    false     -> list_to_atom("classy_discovery_" ++  atom_to_list(Strategy))
-  end.
+  list_to_atom("classy_discovery_" ++  atom_to_list(Strategy)).
+  %% This is hopefully unused:
+  %% case code:is_loaded(Strategy) of
+  %%   {file, _} -> Strategy; %% Provider?
+  %%   false     -> list_to_atom("classy_discovery_" ++  atom_to_list(Strategy))
+  %% end.
 
 -spec discovery_interval() -> pos_integer().
 discovery_interval() ->
