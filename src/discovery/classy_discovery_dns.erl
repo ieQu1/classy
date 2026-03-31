@@ -43,8 +43,7 @@ resolve_hosts(DomainName, srv) ->
   lists:usort(lists:map(fun({_, _, _, Host}) -> Host end, Records)).
 
 node_name(undefined, Host) ->
-  [Name | _] = string:tokens(atom_to_list(node()), "@"),
-  node_name(Name, Host);
+  node_name(classy_autocluster:app_name(), Host);
 node_name(NodeName, Host) ->
   list_to_atom(lists:concat([NodeName, "@", Host])).
 
