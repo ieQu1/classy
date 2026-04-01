@@ -198,8 +198,18 @@ init([TabName, Options]) ->
   {ok, S, {continue, restore}}.
 
 %% @private
-handle_continue(restore, S) ->
-  {noreply, restore(S)}.
+handle_continue(restore, S0 = #s{name = Name}) ->
+  T0 = os:system_time(microsecond),
+  S = restore(S0),
+  Elapsed = (os:system_time(microsecond) - T0) / 1.0e6,
+  LogLevel = if Elapsed > 0.1 -> warning;
+                true          -> debug
+             end,
+  ?tp(LogLevel, classy_table_restore_time,
+      #{ table => Name
+       , time  => Elapsed
+       }),
+  {noreply, S}.
 
 %% @private
 handle_call(#call_ensure_open{}, _From, S) ->

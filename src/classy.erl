@@ -270,10 +270,11 @@ pre_join(Hook, Prio) ->
 %% @doc Register a hook that is executed after a local site joins a
 %% cluster.
 -spec post_join(
-        fun((cluster_id(), Local) -> _),
+        fun((cluster_id(), Local, JoinedTo) -> _),
         classy_hook:prio()
        ) -> classy_hook:hook()
-  when Local :: site().
+  when Local :: site(),
+       JoinedTo :: node().
 post_join(Hook, Prio) ->
   classy_hook:insert(?on_post_join, Hook, Prio).
 
@@ -294,10 +295,11 @@ pre_kick(Hook, Prio) ->
 %% cluster. This hook can perform destructive actions associated with
 %% cleanup.
 -spec post_kick(
-        fun((cluster_id(), Local, kick_intent()) -> _),
+        fun((OldCluster, Local, kick_intent()) -> _),
         classy_hook:prio()
        ) -> classy_hook:hook()
-  when Local :: site().
+  when OldCluster :: cluster_id(),
+       Local :: site().
 post_kick(Hook, Prio) ->
   classy_hook:insert(?on_post_kick, Hook, Prio).
 
