@@ -39,7 +39,7 @@
 %% internal exports:
 -export([start_link/2]).
 
--export_type([tab/0, rec/0, options/0]).
+-export_type([tab/0, rec/0, options/0, on_update_callback/0]).
 
 -include("classy_internal.hrl").
 -include_lib("snabbkaffe/include/trace.hrl").
@@ -53,9 +53,12 @@
 
 -type tab() :: atom().
 
+-type on_update_callback() :: fun((tab(), {w, _Key, _Val} | {d, _Key} | close | open) -> _).
+
 -type options() ::
         #{ ets_options => list()
          , badness_threshold => pos_integer()
+         , on_update => on_update_callback()
          }.
 
 -type rec() :: #classy_kv{ k :: term()
@@ -180,6 +183,7 @@ start_link(Tab, Options) ->
         , log :: _
         , log_size = 0 :: non_neg_integer()
         , badness_threshold :: pos_integer()
+        , on_update :: on_update_callback() | undefined
         }).
 
 -type s() :: #s{}.
@@ -194,6 +198,7 @@ init([TabName, Options]) ->
         , dirty = #{}
         , dir = application:get_env(classy, table_dir, ".")
         , badness_threshold = BadnessThreshold
+        , on_update = maps:get(on_update, Options, undefined)
         },
   {ok, S, {continue, restore}}.
 
@@ -267,6 +272,7 @@ terminate(_, undefined) ->
   ok;
 terminate(_Reason, S = #s{}) ->
   handle_flush(S),
+  exec_on_update(close, S),
   ok.
 
 %%================================================================================
@@ -286,6 +292,7 @@ restore(S = #s{ets = ETS}) ->
       %% Normal case:
       {ok, Log} = open_log(RegularName, read_write),
       {ok, LogSize} = do_restore(Log, start, ETS, 0),
+      exec_on_update_open(S),
       S#s{ log = Log
          , log_size = LogSize
          };
@@ -312,7 +319,7 @@ do_restore(Log, Cont0, ETS, N) ->
            (?clear) ->
             ets:match_delete(ETS, '_')
         end,
-        Chunk),
+       Chunk),
       do_restore(Log, Cont, ETS, N + length(Chunk));
     eof ->
       {ok, N}
@@ -329,11 +336,13 @@ handle_write(
  ) ->
   ok = write_log(Log, [?w(K, V)]),
   ets:insert(ETS, #classy_kv{k = K, v = V}),
+  exec_on_update({w, K, V}, S),
   S#s{ dirty = maps:remove(K, D)
      , log_size = LogSize + 1
      };
 handle_write(#call_write{k = K, v = V, wal = false}, S = #s{ets = ETS, dirty = D}) ->
   ets:insert(ETS, #classy_kv{k = K, v = V}),
+  exec_on_update({w, K, V}, S),
   S#s{ dirty = D#{K => true}
      }.
 
@@ -343,11 +352,13 @@ handle_delete(
  ) ->
   ok = write_log(Log, [?d(K)]),
   ets:delete(ETS, K),
+  exec_on_update({d, K}, S),
   S#s{ dirty = maps:remove(K, D)
      , log_size = LogSize + 1
      };
 handle_delete(#call_delete{k = K, wal = false}, S = #s{ets = ETS, dirty = D}) ->
   ets:delete(ETS, K),
+  exec_on_update({d, K}, S),
   S#s{dirty = D#{K => true}}.
 
 handle_flush(S = #s{log = Log, dirty = Dirty}) when Log =:= undefined;
@@ -371,6 +382,34 @@ handle_flush(S = #s{ets = ETS, log = Log, dirty = Dirty, log_size = LogSize0}) -
   S#s{ dirty = #{}
      , log_size = LogSize
      }.
+
+-spec exec_on_update_open(#s{}) -> ok.
+exec_on_update_open(#s{on_update = undefined}) ->
+  ok;
+exec_on_update_open(S = #s{ets = ETS}) ->
+  exec_on_update(open, S),
+  ets:foldl(
+    fun(#classy_kv{k = K, v = V}, Acc) ->
+        exec_on_update({w, K, V}, S),
+        Acc
+    end,
+    undefined,
+    ETS),
+  ok.
+
+exec_on_update(_, #s{on_update = undefined}) ->
+  ok;
+exec_on_update(Op, #s{on_update = Fun, name = Name}) ->
+  try Fun(Name, Op)
+  catch
+    EC:Err:Stack ->
+      ?tp(error, classy_table_on_update_callback_failure,
+          #{ EC         => Err
+           , stacktrace => Stack
+           , table      => Name
+           , callback   => Fun
+           })
+  end.
 
 -spec do_compaction(s()) -> {ok, s()} | {error, _Reason, s()}.
 do_compaction(S0 = #s{name = Name, ets = Ets}) ->

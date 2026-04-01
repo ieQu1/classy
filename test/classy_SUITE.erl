@@ -471,6 +471,7 @@ no_unexpected_events(Trace) ->
         , classy_table_aborted_compaction
         , classy_hook_failure
         , classy_discovery_failure
+        , classy_table_on_update_callback_failure
         ],
         Trace)).
 
