@@ -416,7 +416,7 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
       end;
     undefined ->
       %% Site is not in any cluster:
-      {ok, S} = join_cluster(Cluster, Local, S0),
+      {ok, S} = join_cluster(Cluster, Node, Local, S0),
       do_join_node(Node, Cluster, Remote, MemData, S)
   end.
 
@@ -432,9 +432,9 @@ on_leave(S0 = #s{cluster = Cluster, site = Local}, Intent) ->
       init_cluster()
   end.
 
-join_cluster(Cluster, Local, S = #s{run_level = 0}) ->
+join_cluster(Cluster, JoinToNode, Local, S = #s{run_level = 0}) ->
   {ok, _} = classy_sup:ensure_membership(Cluster, Local),
-  classy_hook:foreach(?on_post_join, [Cluster, Local]),
+  classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode]),
   set_val(?the_cluster, Cluster),
   {ok, S#s{cluster = Cluster}}.
 

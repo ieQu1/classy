@@ -51,7 +51,7 @@ init() ->
   classy:on_create_site(fun classy_builtin_hooks:log_create_site/1, 100),
   classy:on_create_cluster(fun classy_builtin_hooks:log_create_cluster/2, 100),
   classy:pre_join(fun classy_builtin_hooks:log_pre_join/4, 100),
-  classy:post_join(fun classy_builtin_hooks:log_post_join/2, -100),
+  classy:post_join(fun classy_builtin_hooks:log_post_join/3, -100),
   classy:on_membership_change(fun classy_builtin_hooks:log_membership_change/4, 100),
   classy:run_level(fun classy_builtin_hooks:log_run_level/2, -100),
   %% User initialization:

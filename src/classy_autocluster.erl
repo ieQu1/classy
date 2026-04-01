@@ -99,7 +99,7 @@ app_name() ->
 %%================================================================================
 
 -record(s,
-        { t     :: classy_lib:wakeup_timer()
+        { t :: classy_lib:wakeup_timer()
         }).
 
 init(_) ->

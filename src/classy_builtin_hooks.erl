@@ -10,7 +10,7 @@
         , log_create_site/1
         , log_create_cluster/2
         , log_pre_join/4
-        , log_post_join/2
+        , log_post_join/3
         , log_membership_change/4
         , log_run_level/2
         ]).
@@ -72,10 +72,11 @@ log_pre_join(Cluster, Remote, Node, UserArg) ->
        , user_arg => UserArg
        }).
 
-log_post_join(Cluster, Local) ->
+log_post_join(Cluster, Local, JoinToNode) ->
   ?tp(notice, classy_joined_cluster,
       #{ cluster => Cluster
        , local => Local
+       , joined_to_node => JoinToNode
        }).
 
 log_membership_change(Cluster, Local, Remote, Member) ->
