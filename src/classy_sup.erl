@@ -116,7 +116,7 @@ init(#table_sup{}) ->
               , start    => {classy_table, start_link, []}
               , shutdown => infinity
               , type     => worker
-              , restart  => permanent
+              , restart  => transient
               },
   SupFlags = #{ strategy      => simple_one_for_one
               , intensity     => 10

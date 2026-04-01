@@ -93,7 +93,7 @@ cancel_wakeup({_, TRef}) ->
   undefined.
 
 %% @doc Send exit signal `Reason' to a process and wait for the shutdown.
--spec sync_stop_proc(pid() | atom(), _ExitReason, timeout()) -> ok.
+-spec sync_stop_proc(pid() | atom(), _ExitReason, timeout()) -> ok | {error, timeout}.
 sync_stop_proc(undefined, _, _) ->
   ok;
 sync_stop_proc(Name, Reason, Timeout) when is_atom(Name) ->
