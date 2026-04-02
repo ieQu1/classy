@@ -401,7 +401,7 @@ t_999_fuzz(_Config) ->
               , fixtures => classy_test_fixture:defaults(?FUNCTION_NAME)
               }),
            %% Run test:
-           {_History, State, Result} = proper_statem:run_commands(classy_test_fuzzer, Cmds),
+           {_History, State, Result} = classy_test_fuzzer:run_commands(Cmds),
            ct:log(info, "*** Model state:~n  ~p~n", [State]),
            ct:log("*** Result:~n  ~p~n", [Result]),
            %% Always verify the final state:

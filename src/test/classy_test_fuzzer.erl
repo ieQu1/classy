@@ -12,6 +12,8 @@
         , is_running/2
         , running_sites/1
         , sites_of_cluster/2
+        , trace_and_run/1
+        , run_commands/1
         ]).
 
 %% behavior callbacks:
@@ -138,7 +140,7 @@ do_join_node(Origin, TargetNode, Intent, Retry) ->
   end.
 
 kick_site(Origin, Target, Intent) ->
-  ?tp(classy_test_fuzzer_join_node,
+  ?tp(classy_test_fuzzer_kick_site,
       #{ site => Origin
        , target => Target
        , intent => Intent
@@ -161,6 +163,19 @@ kick_site(Origin, Target, Intent) ->
 %%================================================================================
 %% Utility functions
 %%================================================================================
+
+run_commands(Cmds) ->
+  Wrapped = [case I of
+               {set, Var, {call, M, F, A}} ->
+                 {set, Var, {call, ?MODULE, trace_and_run, [{M, F, A}]}};
+               _ ->
+                 I
+             end || I <- Cmds],
+  proper_statem:run_commands(?MODULE, Wrapped).
+
+trace_and_run(MFA = {M, F, A}) ->
+  ?tp_span(debug, classy_test_fuzzer_exec, #{mfa => MFA},
+           apply(M, F, A)).
 
 format_cmds(Cmds) ->
   lists:map(
@@ -264,6 +279,8 @@ initial_state(Conf) ->
   {init, Conf}.
 
 %% Initial connection:
+next_state(S, Ret, {call, ?MODULE, trace_and_run, [{M, F, A}]}) ->
+  next_state(S, Ret, {call, M, F, A});
 next_state(_, _Ret, {call, ?MODULE, init_cluster, [TestConf]}) ->
   #{sites := Sites0} = TestConf,
   {Sites, NextClusterId} =
