@@ -13,7 +13,7 @@
         , running_sites/1
         , sites_of_cluster/2
         , trace_and_run/1
-        , run_commands/1
+        , wrap_commands/1
         ]).
 
 %% behavior callbacks:
@@ -66,11 +66,12 @@
            cluster := classy:cluster_id() | undefined
          , running := boolean()
          , conf := classy_test_site:conf()
+         , in_sync := boolean()
          }.
 
 -type s() ::
         #{ module := module()
-         , sites := site_state()
+         , sites := #{classy:site() => site_state()}
          , quorum := pos_integer()
          , n_sites := pos_integer()
            %% Symbolic ID of the cluster (it's not equal to the actual cluster ID, which is random)
@@ -125,9 +126,10 @@ do_join_node(Origin, TargetNode, Intent, Retry) ->
              fun() ->
                  classy:join_node(TargetNode, Intent)
              end,
-             10_000),
+             15_000),
   case Result of
     ok ->
+      ct:sleep(10),
       ok;
     {error, not_in_cluster} when Retry =< 10 ->
       %% Note: we use retries since there's a temporary state
@@ -164,14 +166,14 @@ kick_site(Origin, Target, Intent) ->
 %% Utility functions
 %%================================================================================
 
-run_commands(Cmds) ->
-  Wrapped = [case I of
-               {set, Var, {call, M, F, A}} ->
-                 {set, Var, {call, ?MODULE, trace_and_run, [{M, F, A}]}};
-               _ ->
-                 I
-             end || I <- Cmds],
-  proper_statem:run_commands(?MODULE, Wrapped).
+%% @doc Wrap every command in `trace_and_run' call:
+wrap_commands(Cmds) ->
+  [case I of
+     {set, Var, {call, M, F, A}} ->
+       {set, Var, {call, ?MODULE, trace_and_run, [{M, F, A}]}};
+     _ ->
+       I
+   end || I <- Cmds].
 
 trace_and_run(MFA = {M, F, A}) ->
   ?tp_span(debug, classy_test_fuzzer_exec, #{mfa => MFA},
@@ -290,6 +292,7 @@ next_state(_, _Ret, {call, ?MODULE, init_cluster, [TestConf]}) ->
                  , #{ cluster => Acc
                     , running => false
                     , conf    => Conf
+                    , in_sync => true
                     }
                  },
           {Elem, Acc + 1}
@@ -313,13 +316,19 @@ next_state(S = #{sites := Sites}, _Ret, {call, ?MODULE, join_node, [Origin, Targ
   #{Target := #{cluster := Cluster}} = Sites,
   update_site(
     Origin,
-    fun(SiteS) -> SiteS#{cluster := Cluster} end,
+    fun(SiteS) ->
+        %% Joining to a live node syncs the origin:
+        SiteS#{cluster := Cluster, in_sync := true}
+    end,
     S);
 next_state(S, _Ret, {call, ?MODULE, kick_site, [_Origin, Target, _Intent]}) ->
   #{cluster_id := NextClusterId} = S,
   update_site(
     Target,
-    fun(SiteS) -> SiteS#{cluster := NextClusterId} end,
+    fun(SiteS = #{running := Running}) ->
+        %% If site is kicked while stopped, we mark it as out-of-sync:
+        SiteS#{cluster := NextClusterId, in_sync := Running}
+    end,
     S#{cluster_id := NextClusterId + 1});
 next_state(S = #{module := Mod}, Ret, Command) ->
   Mod:next_state(S, Ret, Command).

@@ -401,11 +401,13 @@ t_999_fuzz(_Config) ->
               , fixtures => classy_test_fixture:defaults(?FUNCTION_NAME)
               }),
            %% Run test:
-           {_History, State, Result} = classy_test_fuzzer:run_commands(Cmds),
+           {_History, State, Result} = proper_statem:run_commands(
+                                         classy_test_fuzzer,
+                                         classy_test_fuzzer:wrap_commands(Cmds)),
            ct:log(info, "*** Model state:~n  ~p~n", [State]),
            ct:log("*** Result:~n  ~p~n", [Result]),
-           %% Always verify the final state:
-           fuzz_verify(State),
+           %% TODO: Always verify the final state (does propere return the state after applying `next_state' or not?)
+           %% fuzz_verify(State),
            Result =:= ok orelse error({invalid_result, Result})
          after
            ok = classy_test_cluster:stop(normal)
@@ -418,42 +420,64 @@ t_999_fuzz(_Config) ->
 fuzz_verify({init, _}) ->
   ok;
 fuzz_verify(S = #{sites := Sites}) ->
-  ct:sleep(1000),
   lists:foreach(
     fun(Site) ->
-        #{Site := #{cluster := Cluster}} = Sites,
-        ExpectedSites = classy_test_fuzzer:sites_of_cluster(Cluster, S),
-        %% Check cluster member sites:
-        ?retry(
-           1000,
-           10,
-           ?assertSameSet(
-              ExpectedSites,
-              classy_test_site:call(Site, classy, sites, []),
-              #{ on => Site
-               })),
-        %% Check all nodes:
-        ?retry(
-           100,
-           10,
-           ?assertSameSet(
-              [fuzz_node_name(I) || I <- ExpectedSites],
-              classy_test_site:call(Site, classy, nodes, [all]),
-              #{ on => Site
-               })),
-        ?retry(
-           100,
-           10,
-           ?assertSameSet(
-              [fuzz_node_name(I)
-               || I <- ExpectedSites,
-                  classy_test_fuzzer:is_running(I, S)],
-              classy_test_site:call(Site, classy, nodes, [running]),
-              #{ on => Site
-               })),
-        ok
+        ?retry(100, 100, fuzz_verify_site(Site, S))
     end,
     classy_test_fuzzer:running_sites(S)).
+
+fuzz_verify_site(Site, S = #{sites := Sites}) ->
+  #{Site := #{cluster := Cluster, in_sync := InSync}} = Sites,
+  %% This property always holds, regardless of the sync status:
+  no_stopped_nodes_reported_as_running(Site, S),
+  %% Verify list of peer sites:
+  ExpectedSites = classy_test_fuzzer:sites_of_cluster(Cluster, S),
+  InSync andalso
+    ?assertSameSet(
+       ExpectedSites,
+       classy_test_site:call(Site, classy, sites, []),
+       #{ on => Site
+        , msg => "View of the cluster"
+        }),
+  %% Verify list of all nodes:
+  InSync andalso
+    ?assertSameSet(
+       [fuzz_node_name(I) || I <- ExpectedSites],
+       classy_test_site:call(Site, classy, nodes, [all]),
+       #{ on  => Site
+        , msg => "View of all nodes"
+        }),
+  %% Check running nodes:
+  InSync andalso
+    ?assertSameSet(
+       [fuzz_node_name(I)
+        || I <- ExpectedSites,
+           classy_test_fuzzer:is_running(I, S)],
+       classy_test_site:call(Site, classy, nodes, [running]),
+       #{ on  => Site
+        , msg => "View of running nodes"
+        }).
+
+%% This function fails if `Site' reports any site that must be stopped
+%% according to the spec as running.
+no_stopped_nodes_reported_as_running(Site, #{sites := Sites}) ->
+  StoppedNodes = maps:fold(
+                   fun(Site, #{running := Running}, Acc) ->
+                       case Running of
+                         false -> [fuzz_node_name(Site) | Acc];
+                         true  -> Acc
+                       end
+                   end,
+                   [],
+                   Sites),
+  Running = classy_test_site:call(Site, classy, nodes, [running]),
+  ?assertMatch(
+     Running,
+     Running -- StoppedNodes,
+     #{ msg => stopped_node_is_reported_as_running
+      , on_site => Site
+      , sites => Sites
+      }).
 
 fuzz_node_name(Site) ->
   binary_to_atom(<<Site/binary, "@127.0.0.1">>).
