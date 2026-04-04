@@ -52,9 +52,14 @@
 %%================================================================================
 
 %% @private
-init_per_cluster(#{testcase := TC}, State) ->
+init_per_cluster(Conf, State) ->
+  Suffix = case Conf of
+             #{testcase := TC} -> [TC];
+             _                 -> []
+           end,
+  Timestamp = integer_to_binary(os:system_time(second)),
   {ok, CWD} = file:get_cwd(),
-  WD = filename:join([CWD, ?MODULE, TC]),
+  WD = filename:join([CWD, ?MODULE] ++ Suffix ++ [Timestamp]),
   ok = filelib:ensure_path(WD),
   {ok, State#{workdir => WD}}.
 
@@ -66,8 +71,12 @@ cleanup_per_cluster(_Conf, Success, #{workdir := WD}) ->
               _       -> Success
             end,
   case DoClean of
-    true  -> file:del_dir_r(WD);
-    false -> ok
+    true ->
+      logger:notice("Cleaning up working directory ~s", [WD]),
+      file:del_dir_r(WD);
+    false ->
+      logger:notice("Keeping working directory ~s", [WD]),
+      ok
   end.
 
 %% @private

@@ -148,6 +148,7 @@ cleanup_per_node(Fixtures, Site, Node, State) ->
 defaults(TestCase) ->
   [ {classy_test_workdir, #{testcase => TestCase}}
   , {classy_test_code_path, #{}}
+  , {classy_test_logger, #{}}
   , {classy_test_cover, #{}}
   ].
 
