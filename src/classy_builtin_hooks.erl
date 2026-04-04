@@ -84,7 +84,7 @@ log_membership_change(Cluster, Local, Remote, Member) ->
            true -> classy_member_join;
            false -> classy_member_leave
          end,
-  ?tp(notice, Kind,
+  ?tp(info, Kind,
       #{ cluster => Cluster
        , local => Local
        , remote => Remote

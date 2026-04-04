@@ -99,7 +99,7 @@
 
 -record(call_set, {target :: classy:site(), k :: site_prop(), v :: term()}).
 -record(call_cleanup, {forget_after :: pos_integer()}).
--record(call_sync, {}).
+-record(call_flush, {}).
 -record(call_get_data, {since :: clock(), acked :: clock()}).
 
 -record(s,
@@ -279,8 +279,8 @@ handle_call(#call_get_data{since = Since, acked = Acked}, _From, S) ->
 handle_call(#call_cleanup{forget_after = FA}, _From, S) ->
   Reply = handle_cleanup(FA, S),
   {reply, Reply, S};
-handle_call(#call_sync{}, _From, S0) ->
-  S = handle_sync(S0),
+handle_call(#call_flush{}, _From, S0) ->
+  S = handle_flush(S0),
   {reply, ok, S};
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
@@ -308,7 +308,7 @@ handle_cast(Cast, S) ->
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
 handle_info(#to_sync_out{}, S0) ->
-  S = handle_sync(S0#s{sync_timer = undefined}),
+  S = handle_flush(S0#s{sync_timer = undefined}),
   {noreply, need_sync(S)};
 handle_info(Info, S) ->
   ?tp(warning, ?classy_unknown_event,
@@ -333,7 +333,7 @@ terminate(Reason, #s{cluster = Cluster, site = Site}) ->
 %% Internal functions
 %%================================================================================
 
-handle_sync(S0) ->
+handle_flush(S0) ->
   ok = classy_table:flush(?ptab),
   S = handle_sync_out(S0),
   run_hooks(S),
