@@ -78,6 +78,8 @@
 -define(d(K), {d, K}).
 -define(clear, clear).
 
+-define(call_timeout, infinity).
+
 %%================================================================================
 %% API functions
 %%================================================================================
@@ -90,9 +92,9 @@
 open(Tab, Options) when is_atom(Tab), is_map(Options) ->
   case classy_sup:start_table(Tab, Options) of
     {ok, Pid} ->
-      gen_server:call(Pid, #call_ensure_open{tab = Tab}, infinity);
+      gen_server:call(Pid, #call_ensure_open{tab = Tab}, ?call_timeout);
     {error, {already_started, Pid}} ->
-      gen_server:call(Pid, #call_ensure_open{tab = Tab}, infinity);
+      gen_server:call(Pid, #call_ensure_open{tab = Tab}, ?call_timeout);
     Err = {error, _} ->
       Err
   end.
@@ -118,39 +120,60 @@ stop(Tab, Timeout) ->
 %% No writes to disk are made until `flush' is called explicitly or implicitly.
 -spec dirty_write(tab(), _Key, _Val) -> ok.
 dirty_write(Tab, Key, Val) ->
-  gen_server:call(?via(Tab), #call_write{k = Key, v = Val, wal = false}).
+  gen_server:call(
+    ?via(Tab),
+    #call_write{k = Key, v = Val, wal = false},
+    ?call_timeout).
 
 %% @doc Write operation to WAL, sync WAL and then update RAM representation of the record.
 %%
 %% Note: this is a heavy operation.
 -spec write(tab(), _Key, _Val) -> ok.
 write(Tab, Key, Val) ->
-  gen_server:call(?via(Tab), #call_write{k = Key, v = Val, wal = true}).
+  gen_server:call(
+    ?via(Tab),
+    #call_write{k = Key, v = Val, wal = true},
+    ?call_timeout).
 
 %% @doc Mark record as deleted and dirty.
 -spec dirty_delete(tab(), _Key) -> ok.
 dirty_delete(Tab, Key) ->
-  gen_server:call(?via(Tab), #call_delete{k = Key, wal = false}).
+  gen_server:call(
+    ?via(Tab),
+    #call_delete{k = Key, wal = false},
+    ?call_timeout).
 
 %% @doc Write to the WAL that the record has been deleted and update the RAM representation.
 -spec delete(tab(), _Key) -> ok.
 delete(Tab, Key) ->
-  gen_server:call(?via(Tab), #call_delete{k = Key, wal = true}).
+  gen_server:call(
+    ?via(Tab),
+    #call_delete{k = Key, wal = true},
+    ?call_timeout).
 
 %% @doc Persist all records that got dirtied prior to this call to WAL.
 -spec flush(tab()) -> ok.
 flush(Tab) ->
-  gen_server:call(?via(Tab), #call_flush{}, infinity).
+  gen_server:call(
+    ?via(Tab),
+    #call_flush{},
+    ?call_timeout).
 
 %% @doc Make a checkpoint and trunkate the WAL.
 -spec force_compaction(tab()) -> ok.
 force_compaction(Tab) ->
-  gen_server:call(?via(Tab), #call_force_compaction{}, infinity).
+  gen_server:call(
+    ?via(Tab),
+    #call_force_compaction{},
+    ?call_timeout).
 
 %% @doc Drop the table (it must be open)
 -spec drop(tab()) -> ok.
 drop(Tab) ->
-  gen_server:call(?via(Tab), #call_drop{}, infinity).
+  gen_server:call(
+    ?via(Tab),
+    #call_drop{},
+    ?call_timeout).
 
 %% @doc Lookup a value from the table.
 -spec lookup(tab(), _Key) -> [_Val].
@@ -160,7 +183,10 @@ lookup(Tab, Key) ->
 %% @doc Delete all data in the table.
 -spec clear(tab()) -> ok.
 clear(Tab) ->
-  gen_server:call(?via(Tab), #call_clear{}, infinity).
+  gen_server:call(
+    ?via(Tab),
+    #call_clear{},
+    ?call_timeout).
 
 %%================================================================================
 %% Internal exports

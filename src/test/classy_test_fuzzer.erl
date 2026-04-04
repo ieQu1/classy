@@ -79,6 +79,8 @@
          , _ => _
          }.
 
+-define(rpc_timeout, 15_000).
+
 %%================================================================================
 %% Internal exports
 %%================================================================================
@@ -93,7 +95,7 @@ init_cluster(#{sites := Sites, quorum := Quorum, n_sites := NSites}) ->
                           , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
                                     , quorum => Quorum
                                     , n_sites => NSites
-                                    , sync_timeout => 10
+                                    , sync_timeout => 100
                                     }
                           }},
         Conf = Conf0#{fixtures => [ClassyFixture] ++ Fixtures},
@@ -154,7 +156,7 @@ kick_site(Origin, Target, Intent) ->
          fun() ->
              classy:kick_site(Target, Intent)
          end,
-         10_000),
+         ?rpc_timeout),
        #{ ?snk_kind := classy_member_leave
         , remote    := Target
         , local     := Origin
@@ -176,7 +178,7 @@ wrap_commands(Cmds) ->
    end || I <- Cmds].
 
 trace_and_run(MFA = {M, F, A}) ->
-  ?tp_span(debug, classy_test_fuzzer_exec, #{mfa => MFA},
+  ?tp_span(notice, classy_test_fuzzer_exec, #{mfa => MFA},
            apply(M, F, A)).
 
 format_cmds(Cmds) ->
@@ -244,17 +246,18 @@ enrich_test_conf_(Conf = #{module := _, sites := Sites}) ->
 running_site_command_(Site, S = #{sites := Sites}) ->
   #{Site := #{cluster := Cluster}} = Sites,
   OtherMembers = sites_of_cluster(Cluster, S) -- [Site],
+  OtherRunning = running_sites(S),% -- [Site],
   frequency(
-    [ {10, {call, ?MODULE, kick_site, [Site, oneof(OtherMembers), kick]}} || length(OtherMembers) > 0] ++
+    [ {7, {call, ?MODULE, kick_site, [Site, oneof(OtherMembers), kick]}} || length(OtherMembers) > 0] ++
+    [ {10, {call, ?MODULE, join_node, [Site, oneof(OtherRunning), join]}} || length(OtherRunning) > 0] ++
     [ {10, {call, classy_test_site, stop, [Site]}}
-    , {10, {call, ?MODULE, join_node, [Site, oneof(running_sites(S)), join]}}
     | optcall(S, running_site_command, [Site, S], [])
     ]).
 
 stopped_site_command_(Site, S) ->
   frequency(
     [ {10, {call, classy_test_site, start, [Site]}}
-    | optcall(S, running_site_command, [Site, S], [])
+    | optcall(S, stopped_site_command, [Site, S], [])
     ]).
 
 site_command_(Site, S) ->

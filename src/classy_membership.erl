@@ -36,6 +36,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+-define(call_timeout, infinity).
+
 %%================================================================================
 %% Type declarations
 %%================================================================================
@@ -148,7 +150,10 @@
 -spec set_member(classy:cluster_id(), classy:site(), classy:site(), boolean()) -> ok | {error, _}.
 set_member(Cluster, Local, Target, Mem) when is_boolean(Mem) ->
   try
-    gen_server:call(?via(Cluster, Local), #call_set{target = Target, k = ?mem, v = Mem}, infinity)
+    gen_server:call(
+      ?via(Cluster, Local),
+      #call_set{target = Target, k = ?mem, v = Mem},
+      ?call_timeout)
   catch
     EC:Err -> {error, {EC, Err}}
   end.
@@ -203,12 +208,18 @@ node_of_site(Cluster, Local) ->
 %% `ForgetAfter' from the local state.
 -spec cleanup(classy:cluster_id(), classy:site(), pos_integer()) -> ok.
 cleanup(Cluster, Local, ForgetAfter) ->
-  gen_server:call(?via(Cluster, Local), #call_cleanup{forget_after = ForgetAfter}).
+  gen_server:call(
+    ?via(Cluster, Local),
+    #call_cleanup{forget_after = ForgetAfter},
+    ?call_timeout).
 
 %% @doc Force sending of events and execution of hooks.
 -spec flush(classy:cluster_id(), classy:site()) -> ok.
 flush(Cluster, Local) ->
-  gen_server:call(?via(Cluster, Local), #call_sync{}).
+  gen_server:call(
+    ?via(Cluster, Local),
+    #call_flush{},
+    ?call_timeout).
 
 %%================================================================================
 %% Internal exports
@@ -228,7 +239,10 @@ cast_sync(Cluster, Site, Cast) ->
 %% @doc Get membership data
 -spec get_data(classy:cluster_id(), classy:site(), clock(), clock()) -> sync_data().
 get_data(Cluster, Local, Since, Acked) ->
-  gen_server:call(?via(Cluster, Local), #call_get_data{since = Since, acked = Acked}).
+  gen_server:call(
+    ?via(Cluster, Local),
+    #call_get_data{since = Since, acked = Acked},
+    ?call_timeout).
 
 %%================================================================================
 %% behavior callbacks

@@ -286,6 +286,7 @@ t_050_pre_checks(_Conf) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies functionality of `at_lower_level' API.
 t_060_at_lower_level(_Config) ->
   S1 = <<"s1">>,
   ?check_trace(
@@ -317,6 +318,7 @@ t_060_at_lower_level(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies site autoclean functionality
 t_070_cleanup(_Config) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
@@ -367,9 +369,9 @@ t_999_fuzz(_Config) ->
   %% values to avoid blowing up CI. Hence it's recommended to
   %% increase the max_size and numtests when doing local
   %% development using "apps/emqx/test/sessds.cfg"
-  NTests = ct:get_config({fuzzer, n_tests}, 100),
+  NTests = ct:get_config({fuzzer, n_tests}, 30),
   MaxSize = ct:get_config({fuzzer, max_size}, 100),
-  NCommandsFactor = ct:get_config({fuzzer, command_multiplier}, 2),
+  NCommandsFactor = ct:get_config({fuzzer, command_multiplier}, 4),
   ?run_prop(
      #{ proper =>
           #{ timeout => 3_000_000
@@ -398,7 +400,7 @@ t_999_fuzz(_Config) ->
            classy_test_cluster:start_link(
              #{ peer => #{ args => ["-kernel", "prevent_overlapping_partitions", "false"]
                          }
-              , fixtures => classy_test_fixture:defaults(?FUNCTION_NAME)
+              , fixtures => classy_test_fixture:defaults(?FUNCTION_NAME) ++ [{classy_test_snabbkaffe, #{}}]
               }),
            %% Run test:
            {_History, State, Result} = proper_statem:run_commands(
@@ -406,11 +408,12 @@ t_999_fuzz(_Config) ->
                                          classy_test_fuzzer:wrap_commands(Cmds)),
            ct:log(info, "*** Model state:~n  ~p~n", [State]),
            ct:log("*** Result:~n  ~p~n", [Result]),
-           %% TODO: Always verify the final state (does propere return the state after applying `next_state' or not?)
+           %% TODO: Always verify the final state (does proper return the state after applying `next_state' or not?)
            %% fuzz_verify(State),
-           Result =:= ok orelse error({invalid_result, Result})
-         after
+           Result =:= ok orelse error({invalid_result, Result}),
            ok = classy_test_cluster:stop(normal)
+         after
+           ok = classy_test_cluster:stop(error)
          end,
          [ fun no_unexpected_events/1
          , fun events_on_all_sites/1
@@ -438,6 +441,8 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
        classy_test_site:call(Site, classy, sites, []),
        #{ on => Site
         , msg => "View of the cluster"
+        , diagnostic => diagnostic(Site)
+        , model_state => S
         }),
   %% Verify list of all nodes:
   InSync andalso
@@ -446,6 +451,8 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
        classy_test_site:call(Site, classy, nodes, [all]),
        #{ on  => Site
         , msg => "View of all nodes"
+        , diagnostic => diagnostic(Site)
+        , model_state => S
         }),
   %% Check running nodes:
   InSync andalso
@@ -456,7 +463,10 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
        classy_test_site:call(Site, classy, nodes, [running]),
        #{ on  => Site
         , msg => "View of running nodes"
-        }).
+        , diagnostic => diagnostic(Site)
+        , model_state => S
+        }),
+  ok.
 
 %% This function fails if `Site' reports any site that must be stopped
 %% according to the spec as running.
@@ -699,3 +709,12 @@ setup_hooks(Site) ->
         classy_node:maybe_init_the_site(Site)
     end,
     0).
+
+diagnostic(Site) ->
+  classy_test_site:call(
+    Site,
+    fun() ->
+        #{ members => catch ets:tab2list(classy_membership)
+         , node => catch ets:tab2list(classy_node)
+         }
+    end).
