@@ -382,8 +382,10 @@ handle_join(S, Call) ->
       end;
     #{cluster := Cluster} ->
       {error, {cluster_changed, #{ExpectedCluster => Cluster}}};
+    {error, _} = Err ->
+      Err;
     Err ->
-      {error, Err}
+      {error, {bad_hello, Err}}
   end.
 
 -spec do_join_node(

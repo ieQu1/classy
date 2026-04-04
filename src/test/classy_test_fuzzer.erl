@@ -128,7 +128,7 @@ do_join_node(Origin, TargetNode, Intent, Retry) ->
              fun() ->
                  classy:join_node(TargetNode, Intent)
              end,
-             15_000),
+             ?rpc_timeout),
   case Result of
     ok ->
       ct:sleep(10),
@@ -339,8 +339,31 @@ next_state(S = #{module := Mod}, Ret, Command) ->
 precondition(_, _) ->
     true.
 
+
+postcondition(S, {call, ?MODULE, trace_and_run, [{M, F, A}]}, Result) ->
+  postcondition(S, {call, M, F, A}, Result);
 postcondition(PrevState, Call, Result) ->
   CurrentState = next_state(PrevState, Result, Call),
+  case Call of
+    {call, ?MODULE, join_node, Args} ->
+      ?assertMatch(
+         ok,
+         Result,
+         #{ msg => "Join failed"
+          , args => Args
+          , model_state => CurrentState
+          });
+    {call, ?MODULE, kick_site, Args} ->
+      ?assertMatch(
+         ok,
+         Result,
+         #{ msg => "Kick failed"
+          , args => Args
+          , model_state => CurrentState
+          });
+    _ ->
+      ok
+  end,
   optcall(CurrentState, postcondition, [CurrentState, Call, Result], true).
 
 %%================================================================================
