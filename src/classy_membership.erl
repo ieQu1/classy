@@ -28,6 +28,10 @@
 %% internal exports:
 -export([start_link/2, cast_sync/3, call_sync/3]).
 
+-ifdef(TEST).
+-export([reset_acked_out/4]).
+-endif.
+
 -export_type([start_args/0, op/0, ord/0, clock/0, sync_data/0]).
 
 -include("classy_internal.hrl").
@@ -240,6 +244,16 @@ flush(Cluster, Local) ->
     ?via(Cluster, Local),
     #call_flush{},
     ?call_timeout).
+
+-ifdef(TEST).
+
+reset_acked_out(Cluster, Local, Remote, Clock) ->
+  classy_table:dirty_write(
+    ?ptab,
+    #pk_acked_out{c = Cluster, l = Local, r = Remote},
+    Clock).
+
+-endif.
 
 %%================================================================================
 %% Internal exports
@@ -742,6 +756,7 @@ set_acked_in(Site, Clock, #s{cluster = Cluster, site = Local}) ->
     ?ptab,
     #pk_acked_in{c = Cluster, l = Local, r = Site},
     Clock).
+
 -spec set_acked_out(classy:site(), clock(), #s{}) -> ok.
 set_acked_out(Site, Clock, #s{cluster = Cluster, site = Local}) ->
   classy_table:dirty_write(

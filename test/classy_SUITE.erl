@@ -361,6 +361,46 @@ t_070_cleanup(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies that sites that membership CRDT recovers
+%% from lost packets. Packet loss is emulated by setting "acked_out"
+%% counters to higher values.
+t_080_desync(_Config) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       %% Prepare system:
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       #{cluster := Cluster} = ?ON(S1, classy_node:hello()),
+       %% Emulate de-sync by setting counters to very high values:
+       ?force_ordering(
+          #{?snk_kind := test_proceed},
+          #{?snk_kind := classy_membership_sync_out}),
+       ?ON(S1, classy_membership:reset_acked_out(Cluster, S1, S2, 1000)),
+       ?ON(S2, classy_membership:reset_acked_out(Cluster, S2, S1, 1000)),
+       ?tp(test_proceed, #{}),
+       %% Wait until one of the sites detects the gap:
+       ?block_until(#{?snk_kind := classy_membership_sync_gap}),
+       %% Connect the third site to make sure the CRDT is healed:
+       N3 = create_start_site(S3, #{}),
+       ?assertMatch(ok, ?ON(S3, classy:join_node(N1, join))),
+       [?retry(
+           1000,
+           10,
+           ?assertSameSet(
+              Sites,
+              ?ON(I, classy:sites())))
+        || I <- Sites]
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
 t_999_fuzz(_Config) ->
   %% NOTE: we set timeout at the lowest level to capture the trace
   %% and have a nicer error message.
