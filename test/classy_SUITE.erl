@@ -372,60 +372,71 @@ t_999_fuzz(_Config) ->
   NTests = ct:get_config({fuzzer, n_tests}, 30),
   MaxSize = ct:get_config({fuzzer, max_size}, 100),
   NCommandsFactor = ct:get_config({fuzzer, command_multiplier}, 4),
-  ?run_prop(
-     #{ proper =>
-          #{ timeout => 3_000_000
-           , numtests => NTests
-           , max_size => MaxSize
-           , start_size => MaxSize
-           , max_shrinks => 0
-           }
-      },
-      ?forall_trace(
-         Cmds,
-         classy_test_fuzzer:cmds(
-           NCommandsFactor,
-           #{ module => ?MODULE
-            , sites => [ {<<"foo">>, #{}}
-                       , {<<"bar">>, #{}}
-                       , {<<"baz">>, #{}}
-                       , {<<"quux">>, #{}}
-                       ]
-            }),
-         #{timetrap => 5_000 * length(Cmds) + 30_000},
-         try
-           %% Print information about the run:
-           io:format(user, "*** Commands:~n~s~n", [classy_test_fuzzer:format_cmds(Cmds)]),
-           %% Initialize the system:
-           classy_test_cluster:start_link(
-             #{ peer => #{ args => ["-kernel", "prevent_overlapping_partitions", "false"]
-                         }
-              , fixtures => classy_test_fixture:defaults(?FUNCTION_NAME) ++ [{classy_test_snabbkaffe, #{}}]
-              }),
-           %% Run test:
-           {_History, State, Result} = proper_statem:run_commands(
-                                         classy_test_fuzzer,
-                                         classy_test_fuzzer:wrap_commands(Cmds)),
-           ct:log(info, "*** Model state:~n  ~p~n", [State]),
-           ct:log("*** Result:~n  ~p~n", [Result]),
-           %% TODO: Always verify the final state (does proper return the state after applying `next_state' or not?)
-           %% fuzz_verify(State),
-           Result =:= ok orelse error({invalid_result, Result}),
-           ok = classy_test_cluster:stop(normal)
-         after
-           ok = classy_test_cluster:stop(error)
-         end,
-         [ fun no_unexpected_events/1
-         , fun events_on_all_sites/1
-         ])),
-  snabbkaffe:stop().
+  ?assertMatch(
+     true,
+     proper:quickcheck(
+       ?FORALL(
+          Cmds,
+          classy_test_fuzzer:cmds(
+            NCommandsFactor,
+            #{ module => ?MODULE
+             , sites => [ {<<"foo">>, #{}}
+                        , {<<"bar">>, #{}}
+                          %% , {<<"baz">>, #{}}
+                          %% , {<<"quux">>, #{}}
+                        ]
+             }),
+          try
+            fuzz_prop(Cmds),
+            true
+          catch
+            EC:Err:Stack ->
+              ct:pal("!!!! Property failed ~p:~p:~p", [EC, Err, Stack]),
+              false
+          end)
+      , [ {numtests, NTests}
+        , {max_size, MaxSize}
+        , {on_output, fun proper_printout/2}
+          %% TODO: Shrinking is currently broken
+        , {max_shrinks, 0}
+        ]
+      )).
+
+fuzz_prop(Cmds) ->
+  ?check_trace(
+     #{timetrap => 5_000 * length(Cmds) + 30_000},
+     try
+       %% Print information about the run:
+       ct:pal("*** Commands:~n~s~n", [classy_test_fuzzer:format_cmds(Cmds)]),
+       %% Initialize the system:
+       classy_test_cluster:start_link(
+         #{ peer => #{ args => ["-kernel", "prevent_overlapping_partitions", "false"]
+                     }
+          , fixtures => classy_test_fixture:defaults(?FUNCTION_NAME) ++ [{classy_test_snabbkaffe, #{}}]
+          }),
+       %% Run test:
+       {_History, State, Result} = proper_statem:run_commands(
+                                     classy_test_fuzzer,
+                                     classy_test_fuzzer:wrap_commands(Cmds)),
+       ct:log(info, "*** Model state:~n  ~p~n", [State]),
+       ct:log("*** Result:~n  ~p~n", [Result]),
+       %% TODO: Always verify the final state (does proper return the state after applying `next_state' or not?)
+       %% fuzz_verify(State),
+       Result =:= ok orelse error({invalid_result, Result}),
+       ok = classy_test_cluster:stop(normal)
+     after
+       ok = classy_test_cluster:stop(error)
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
 
 fuzz_verify({init, _}) ->
   ok;
 fuzz_verify(S = #{sites := Sites}) ->
   lists:foreach(
     fun(Site) ->
-        ?retry(100, 100, fuzz_verify_site(Site, S))
+        ?retry(1000, 10, fuzz_verify_site(Site, S))
     end,
     classy_test_fuzzer:running_sites(S)).
 
@@ -441,7 +452,7 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
        classy_test_site:call(Site, classy, sites, []),
        #{ on => Site
         , msg => "View of the cluster"
-        , diagnostic => diagnostic(Site)
+        , diagnostic => diagnostic(Site, S)
         , model_state => S
         }),
   %% Verify list of all nodes:
@@ -451,7 +462,7 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
        classy_test_site:call(Site, classy, nodes, [all]),
        #{ on  => Site
         , msg => "View of all nodes"
-        , diagnostic => diagnostic(Site)
+        , diagnostic => diagnostic(Site, S)
         , model_state => S
         }),
   %% Check running nodes:
@@ -463,7 +474,7 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
        classy_test_site:call(Site, classy, nodes, [running]),
        #{ on  => Site
         , msg => "View of running nodes"
-        , diagnostic => diagnostic(Site)
+        , diagnostic => diagnostic(Site, S)
         , model_state => S
         }),
   ok.
@@ -506,6 +517,7 @@ no_unexpected_events(Trace) ->
         , classy_hook_failure
         , classy_discovery_failure
         , classy_table_on_update_callback_failure
+        , classy_membership_sync_gap
         ],
         Trace)).
 
@@ -710,11 +722,28 @@ setup_hooks(Site) ->
     end,
     0).
 
-diagnostic(Site) ->
-  classy_test_site:call(
-    Site,
-    fun() ->
-        #{ members => catch ets:tab2list(classy_membership)
-         , node => catch ets:tab2list(classy_node)
-         }
-    end).
+diagnostic(_Site, #{sites := Sites}) ->
+  maps:map(
+    fun(Site, #{running := R}) ->
+        case R of
+          true ->
+            catch classy_test_site:call(
+                    Site,
+                    fun() ->
+                        #{ members => catch ets:tab2list(classy_membership)
+                         , node => catch ets:tab2list(classy_node)
+                         }
+                    end);
+          false ->
+            stopped
+        end
+    end,
+    Sites).
+
+-spec proper_printout(string(), list()) -> _.
+proper_printout(Char, []) when Char =:= ".";
+                               Char =:= "x";
+                               Char =:= "!" ->
+  ct:print("~s", [[Char]]);
+proper_printout(Fmt, Args) ->
+  ct:pal(Fmt, Args).

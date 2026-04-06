@@ -279,14 +279,17 @@ hello() ->
   maybe
     {ok, Cluster} ?= the_cluster(),
     {ok, Site} ?= the_site(),
+    {ok, MemData} ?= classy_membership:get_data(Cluster, Site, 0, 0),
     #{ site => Site
      , cluster => Cluster
      , pid => whereis(?SERVER)
-     , mem_data => classy_membership:get_data(Cluster, Site, 0, 0)
+     , mem_data => MemData
      }
   else
-    _ ->
-      {error, not_in_cluster}
+    undefined ->
+      {error, not_in_cluster};
+    Err ->
+      Err
   end.
 
 %% @doc RPC target
@@ -336,6 +339,7 @@ handle_membership_change_event(
       %% We got kicked:
       ?tp(warning, classy_kicked_remotely,
           #{ cluster => Cluster
+           , local   => ThisSite
            }),
       case on_leave(S0, kicked) of
         {ok, S}      -> {noreply, S};
@@ -402,7 +406,7 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
     {ok, Cluster} ->
       %% Already in the same cluster with `Node'. Set our membership
       %% status and trigger re-sync (do we need to re-run hooks?):
-      classy_membership:cast_sync(Cluster, Local, MemData),
+      classy_membership:call_sync(Cluster, Local, MemData),
       classy_membership:set_member(Cluster, Local, Local, true),
       classy_membership:flush(Cluster, Local),
       {ok, update_runtime(S0)};

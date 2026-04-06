@@ -25,7 +25,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([start_link/2, cast_sync/3]).
+-export([start_link/2, cast_sync/3, call_sync/3]).
 
 -export_type([start_args/0, op/0, ord/0, clock/0, sync_data/0]).
 
@@ -233,16 +233,31 @@ start_link(Cluster, Local) ->
 
 %% @doc Send membership data to the process
 -spec cast_sync(classy:cluster_id(), classy:site(), sync_data()) -> ok.
-cast_sync(Cluster, Site, Cast) ->
-  gen_server:cast(?via(Cluster, Site), Cast).
+cast_sync(Cluster, Site, SyncData) ->
+  gen_server:cast(?via(Cluster, Site), SyncData).
+
+%% @doc Send membership data to the process
+-spec call_sync(classy:cluster_id(), classy:site(), sync_data()) -> ok.
+call_sync(Cluster, Site, SyncData) ->
+  ?tp(notice, classy_membership_call_sync,
+      #{ clus => Cluster
+       , local => Site
+       , clock => #cast_sync.c
+       }),
+  gen_server:call(?via(Cluster, Site), SyncData, ?call_timeout).
 
 %% @doc Get membership data
 -spec get_data(classy:cluster_id(), classy:site(), clock(), clock()) -> sync_data().
 get_data(Cluster, Local, Since, Acked) ->
-  gen_server:call(
-    ?via(Cluster, Local),
-    #call_get_data{since = Since, acked = Acked},
-    ?call_timeout).
+  try
+    gen_server:call(
+      ?via(Cluster, Local),
+      #call_get_data{since = Since, acked = Acked},
+      5_000)
+  catch
+    exit:{noproc, _} ->
+      {error, not_in_cluster}
+  end.
 
 %%================================================================================
 %% behavior callbacks
@@ -289,12 +304,17 @@ handle_call(#call_set{} = CMD, _From, S0) ->
   S = local_command(CMD, S0),
   {reply, ok, S};
 handle_call(#call_get_data{since = Since, acked = Acked}, _From, S) ->
-  {reply, get_sync_data(Since, Acked, S), S};
+  Reply = {ok, get_sync_data(Since, Acked, S)},
+  {reply, Reply, S};
 handle_call(#call_cleanup{forget_after = FA}, _From, S) ->
   Reply = handle_cleanup(FA, S),
   {reply, Reply, S};
 handle_call(#call_flush{}, _From, S0) ->
   S = handle_flush(S0),
+  {reply, ok, S};
+handle_call(#cast_sync{} = Req, _From, S0) ->
+  S = handle_sync_in(Req, S0),
+  run_hooks(S),
   {reply, ok, S};
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
@@ -393,6 +413,13 @@ local_command(C, #call_set{target = Target, k = K, v = V}, S = #s{site = Local})
               , val = V
               , owt = classy_lib:time_s()
               },
+  ?tp(notice, classy_membership_local_command,
+      #{ c => C
+       , local => Local
+       , k => K
+       , clus => S#s.cluster
+       , gcl => S#s.clock
+       }),
   _ = merge(C, Op, S),
   need_sync(S).
 
@@ -411,7 +438,8 @@ handle_sync_in(Req, S0) ->
        , acked => AckedOut
        , data => Data
        }),
-  case get_acked_in(From, S0) >= Since of
+  AckedIn = get_acked_in(From, S0),
+  case AckedIn >= Since of
     true ->
       {Cl, S} = inc_get_clock(sync_clock(Cf, S0)),
       lists:foreach(
@@ -423,6 +451,12 @@ handle_sync_in(Req, S0) ->
      false ->
       %% Gap in sequence. Ignore this message. Peer will be notified
       %% about the expected acked value during the next sync-out:
+      ?tp(debug, classy_membership_sync_gap,
+          #{ acked => {AckedIn, Since}
+           , from => From
+           , c => Cf
+           , data => Data
+           }),
       need_sync(S0)
   end.
 
