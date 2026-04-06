@@ -11,7 +11,8 @@
 -behavior(gen_server).
 
 %% API:
--export([ set_member/4
+-export([ known_clusters/1
+        , set_member/4
         , members/2
         , list_local_sites/1
         , get_data/4
@@ -139,6 +140,25 @@
 %%================================================================================
 %% API functions
 %%================================================================================
+
+%% @doc Return collection of clusters where site is or was peer.
+-spec known_clusters(classy:site()) -> #{classy:cluster_id() => [classy:site()]}.
+known_clusters(Site) ->
+  ets:foldl(
+    fun(#classy_kv{k = K}, Acc) ->
+        case K of
+          #pk_last{c = Cluster, l = Local, r = Remote} when Local =:= Site ->
+            maps:update_with(
+              Cluster,
+              fun(L) -> [Remote | L] end,
+              [Remote],
+              Acc);
+          _ ->
+            Acc
+        end
+    end,
+    #{},
+    ?ptab).
 
 %% @doc Low-level call that sets `Target''s membership state to `true'.
 %%
@@ -457,6 +477,8 @@ handle_sync_in(Req, S0) ->
            , c => Cf
            , data => Data
            }),
+      %% Always set remoted acked counter to heal the gap:
+      set_acked_out(From, AckedOut, S0),
       need_sync(S0)
   end.
 

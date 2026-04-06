@@ -382,8 +382,8 @@ t_999_fuzz(_Config) ->
             #{ module => ?MODULE
              , sites => [ {<<"foo">>, #{}}
                         , {<<"bar">>, #{}}
-                          %% , {<<"baz">>, #{}}
-                          %% , {<<"quux">>, #{}}
+                        , {<<"baz">>, #{}}
+                        , {<<"quux">>, #{}}
                         ]
              }),
           try
@@ -517,7 +517,6 @@ no_unexpected_events(Trace) ->
         , classy_hook_failure
         , classy_discovery_failure
         , classy_table_on_update_callback_failure
-        , classy_membership_sync_gap
         ],
         Trace)).
 

@@ -29,6 +29,7 @@
         , setup_hooks/1
         , join_node/4
         , kick_site/4
+        , start_site/1
         ]).
 
 -export_type([test_conf/0]).
@@ -79,7 +80,8 @@
          , _ => _
          }.
 
--define(rpc_timeout, 15_000).
+-define(rpc_timeout, 5_000).
+-define(sync_timeout, ?rpc_timeout * 3).
 
 %%================================================================================
 %% Internal exports
@@ -95,7 +97,7 @@ init_cluster(#{sites := Sites, quorum := Quorum, n_sites := NSites}) ->
                           , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
                                     , quorum => Quorum
                                     , n_sites => NSites
-                                    , sync_timeout => 100
+                                    , sync_timeout => 1000
                                     }
                           }},
         Conf = Conf0#{fixtures => [ClassyFixture] ++ Fixtures},
@@ -122,7 +124,7 @@ join_node(Origin, Target, Intent, S) ->
                                        Target,
                                        classy_node, hello, [],
                                        ?rpc_timeout),
-       ?tp(notice, classy_test_fuzzer_join_node,
+       ?tp(info, classy_test_fuzzer_join_node,
            #{ site        => Origin
             , target      => Target
             , target_node => TargetNode
@@ -134,11 +136,11 @@ join_node(Origin, Target, Intent, S) ->
               fun() ->
                   classy:join_node(TargetNode, Intent)
               end,
-              ?rpc_timeout)
+              ?sync_timeout)
      end).
 
 kick_site(Origin, Target, Intent, S) ->
-  ?tp(notice, classy_test_fuzzer_kick_site,
+  ?tp(info, classy_test_fuzzer_kick_site,
       #{ site => Origin
        , target => Target
        , intent => Intent
@@ -154,7 +156,7 @@ kick_site(Origin, Target, Intent, S) ->
                     , local     := L
                     } when L =:= Origin orelse L =:= Target),
                 NEvents,
-                ?rpc_timeout),
+                ?sync_timeout),
   Result = classy_test_site:call(
              Origin,
              fun() ->
@@ -162,6 +164,15 @@ kick_site(Origin, Target, Intent, S) ->
              end,
              ?rpc_timeout),
   {Result, snabbkaffe:receive_events(Sub)}.
+
+start_site(Site) ->
+  ?wait_async_action(
+     classy_test_site:start(Site),
+     #{ ?snk_kind := classy_change_run_level
+      , to        := single
+      , ?snk_meta := #{local := Site}
+      },
+     ?sync_timeout).
 
 %%================================================================================
 %% Utility functions
@@ -177,7 +188,7 @@ wrap_commands(Cmds) ->
    end || I <- Cmds].
 
 trace_and_run(MFA = {M, F, A}) ->
-  ?tp_span(notice, classy_test_fuzzer_exec, #{mfa => MFA},
+  ?tp_span(info, classy_test_fuzzer_exec, #{mfa => MFA},
            apply(M, F, A)).
 
 format_cmds(Cmds) ->
@@ -255,7 +266,7 @@ running_site_command_(Site, S = #{sites := Sites}) ->
 
 stopped_site_command_(Site, S) ->
   frequency(
-    [ {10, {call, classy_test_site, start, [Site]}}
+    [ {10, {call, ?MODULE, start_site, [Site]}}
     | optcall(S, stopped_site_command, [Site, S], [])
     ]).
 
@@ -304,7 +315,7 @@ next_state(_, _Ret, {call, ?MODULE, init_cluster, [TestConf]}) ->
   TestConf#{ sites      := maps:from_list(Sites)
            , cluster_id => NextClusterId
            };
-next_state(S, _Ret, {call, classy_test_site, start, [Site]}) ->
+next_state(S, _Ret, {call, ?MODULE, start_site, [Site]}) ->
   update_site(
     Site,
     fun(SiteS) -> SiteS#{running := true} end,
@@ -349,8 +360,8 @@ precondition(S, {call, ?MODULE, join_node, [Local, Target|_]}) ->
   is_running(Target, S) andalso
   in_sync(Target, S) andalso
   Local =/= Target;
-precondition(_, _) ->
-  true.
+precondition(S, Call) ->
+  optcall(S, precondition, [S, Call], true).
 
 postcondition(S, {call, ?MODULE, trace_and_run, [{M, F, A}]}, Result) ->
   postcondition(S, {call, M, F, A}, Result);
@@ -370,6 +381,14 @@ postcondition(PrevState, Call, Result) ->
          {ok, {ok, _Event}},
          Result,
          #{ msg => "Kick failed"
+          , args => Args
+          , model_state => CurrentState
+          });
+    {call, ?MODULE, start_site, Args} ->
+      ?assertMatch(
+         {ok, {ok, _Event}},
+         Result,
+         #{ msg => "Start failed"
           , args => Args
           , model_state => CurrentState
           });

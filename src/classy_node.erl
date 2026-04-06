@@ -492,6 +492,16 @@ init_cluster() ->
     {ok, Site} ?= the_site(),
     logger:update_process_metadata(#{local => Site}),
     {ok, _} = classy_sup:ensure_membership(Cluster, Site),
+    %% Start membership processes for all known former clusters, in
+    %% order to relay information to former peers:
+    maps:foreach(
+      fun(Cluster, Peers) ->
+          case Peers -- [Site] of
+            []      -> ok;
+            [_ | _] -> classy_sup:ensure_membership(Cluster, Site)
+          end
+      end,
+      classy_membership:known_clusters(Site)),
     S = update_runtime(
           #s{ cluster = Cluster
             , site = Site
