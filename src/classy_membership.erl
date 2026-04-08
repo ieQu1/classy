@@ -281,7 +281,7 @@ call_sync(Cluster, Site, SyncData) ->
   gen_server:call(?via(Cluster, Site), SyncData, ?call_timeout).
 
 %% @doc Get membership data
--spec get_data(classy:cluster_id(), classy:site(), clock(), clock()) -> sync_data().
+-spec get_data(classy:cluster_id(), classy:site(), clock(), clock()) -> {ok, sync_data()} | {error, _}.
 get_data(Cluster, Local, Since, Acked) ->
   try
     gen_server:call(
