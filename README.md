@@ -154,11 +154,37 @@ It's recommended to use SRV records.
 
 ### K8S
 
-TODO: fill the description
+```
+{k8s, #{
+  namespace := string(),
+  app       := string(),
+  port      := pos_integer()
+}}
+```
+
+Discover peers via Kubernetes service discovery.
+
+- `namespace`: Kubernetes namespace to search for services
+- `app`: Kubernetes application name (service name prefix)
+- `port`: Erlang distribution port number to use for node connections
+
+This strategy queries the Kubernetes API at `/api/v1/namespaces/{namespace}/endpoints/{app}` to discover peer nodes.
 
 ### etcd
 
-TODO: fill the description
+TODO
+
+```
+{etcd, #{
+  endpoints := [string()],
+  prefix    := string()
+}}
+```
+
+Discover peers via etcd service discovery.
+
+- `endpoints`: List of etcd endpoints to connect to
+- `prefix`: Key prefix to use for service discovery
 
 ## `classy.discovery_interval`
 
