@@ -14,6 +14,7 @@
         , sites_of_cluster/2
         , trace_and_run/1
         , wrap_commands/1
+        , real_cluster_of/1
         ]).
 
 %% behavior callbacks:
@@ -81,7 +82,7 @@
          }.
 
 -define(rpc_timeout, 5_000).
--define(sync_timeout, ?rpc_timeout * 3).
+-define(sync_timeout, ?rpc_timeout * 5).
 
 %%================================================================================
 %% Internal exports
@@ -116,28 +117,40 @@ setup_hooks(Site) ->
 
 join_node(Origin, Target, Intent, S) ->
   TargetNode = classy_test_site:which_node(Target),
-  ?retry(
-     100,
-     100,
-     begin
-       #{cluster := TargetCluster} = classy_test_site:call(
-                                       Target,
-                                       classy_node, hello, [],
-                                       ?rpc_timeout),
-       ?tp(info, classy_test_fuzzer_join_node,
-           #{ site        => Origin
-            , target      => Target
-            , target_node => TargetNode
-            , cluster     => TargetCluster
-            , intent      => Intent
-            }),
-       ok = classy_test_site:call(
-              Origin,
-              fun() ->
-                  classy:join_node(TargetNode, Intent)
-              end,
-              ?sync_timeout)
-     end).
+  ?tp(info, classy_test_fuzzer_join_node,
+      #{ site        => Origin
+       , target      => Target
+       , target_node => TargetNode
+       , cluster     => real_cluster_of(Target)
+       , intent      => Intent
+       }),
+  TargetCluster = cluster_of(Target, S),
+  OriginCluster = cluster_of(Origin, S),
+  case OriginCluster of
+    TargetCluster ->
+      %% If already in the same cluster, no join event expected
+      Result = classy_test_site:call(
+                 Origin,
+                 fun() ->
+                     classy:join_node(TargetNode, Intent)
+                 end,
+                 ?rpc_timeout),
+      {Result, {ok, []}};
+    _ ->
+      exec_and_wait_sync(
+        [Origin | sites_of_cluster(TargetCluster, S)],
+        fun() ->
+            ?retry(100, 10,
+                   ok = classy_test_site:call(
+                          Origin,
+                          fun() ->
+                              classy:join_node(TargetNode, Intent)
+                          end,
+                          ?rpc_timeout))
+        end,
+        ?match_event(#{?snk_kind := classy_member_join, remote := Origin}),
+        S)
+  end.
 
 kick_site(Origin, Target, Intent, S) ->
   ?tp(info, classy_test_fuzzer_kick_site,
@@ -145,25 +158,18 @@ kick_site(Origin, Target, Intent, S) ->
        , target => Target
        , intent => Intent
        }),
-  NEvents = case is_running(Target, S) andalso Origin =/= Target of
-              true  -> 2;
-              false -> 1
-            end,
-  {ok, Sub} = snabbkaffe:subscribe(
-                ?match_event(
-                   #{ ?snk_kind := classy_member_leave
-                    , remote    := Target
-                    , local     := L
-                    } when L =:= Origin orelse L =:= Target),
-                NEvents,
-                ?sync_timeout),
-  Result = classy_test_site:call(
-             Origin,
-             fun() ->
-                 classy:kick_site(Target, Intent)
-             end,
-             ?rpc_timeout),
-  {Result, snabbkaffe:receive_events(Sub)}.
+  exec_and_wait_sync(
+    sites_of_cluster(cluster_of(Origin, S), S),
+    fun() ->
+        classy_test_site:call(
+          Origin,
+          fun() ->
+              classy:kick_site(Target, Intent)
+          end,
+          ?rpc_timeout)
+    end,
+    ?match_event(#{?snk_kind := classy_member_leave, remote := Target}),
+    S).
 
 start_site(Site) ->
   ?wait_async_action(
@@ -237,6 +243,19 @@ sites_of_cluster(Cluster, #{sites := Sites}) ->
     [],
     Sites).
 
+real_cluster_of(Site) ->
+  ?retry(
+     100,
+     100,
+     begin
+       #{cluster := Cluster} =
+         classy_test_site:call(
+           Site,
+           classy_node, hello, [],
+           ?rpc_timeout),
+       Cluster
+     end).
+
 %%================================================================================
 %% Proper generators
 %%================================================================================
@@ -260,7 +279,7 @@ running_site_command_(Site, S = #{sites := Sites}) ->
   frequency(
     [ {7, {call, ?MODULE, kick_site, [Site, oneof(OtherMembers), kick, S]}} || length(OtherMembers) > 0] ++
     [ {10, {call, ?MODULE, join_node, [Site, oneof(OtherRunning), join, S]}} || length(OtherRunning) > 0] ++
-    [ {0, {call, classy_test_site, stop, [Site]}}
+    [ {5, {call, classy_test_site, stop, [Site]}}
     | optcall(S, running_site_command, [Site, S], [])
     ]).
 
@@ -370,7 +389,7 @@ postcondition(PrevState, Call, Result) ->
   case Call of
     {call, ?MODULE, join_node, Args} ->
       ?assertMatch(
-         ok,
+         {ok, {ok, _Events}},
          Result,
          #{ msg => "Join failed"
           , args => Args
@@ -408,6 +427,26 @@ in_sync(Site, #{sites := Sites}) ->
 cluster_of(Site, #{sites := Sites}) ->
   #{Site := #{cluster := C}} = Sites,
   C.
+
+-spec exec_and_wait_sync([classy:site()], Action, snabbkaffe:predicate(), s()) ->
+        {Result, [snabbkaffe:event()]} when
+    Action :: fun(() -> Result).
+exec_and_wait_sync(Sites0, Action, Filter, S) ->
+  Sites = lists:uniq([I || I <- Sites0, is_running(I, S)]),
+  NEvents = length(Sites),
+  WrappedFilter =
+    fun(Event) ->
+        case Filter(Event) of
+          true ->
+            #{?snk_meta := #{local := Local}} = Event,
+            lists:member(Local, Sites);
+          false ->
+            false
+        end
+    end,
+  {ok, Sub} = snabbkaffe:subscribe(WrappedFilter, NEvents, ?sync_timeout),
+  Result = Action(),
+  {Result, snabbkaffe:receive_events(Sub)}.
 
 maybe_generate(Key, Conf, Generator) ->
   case Conf of

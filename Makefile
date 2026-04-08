@@ -38,6 +38,10 @@ cover: | smoke-test
 coveralls:
 	@rebar3 as test coveralls send
 
+.PHONY: fuzz
+fuzz:
+	$(REBAR) ct --name ct --verbose --cover --suite classy_SUITE --case t_999_fuzz
+
 ##########################################################################################
 # Concuerror
 ##########################################################################################
