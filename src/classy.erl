@@ -152,6 +152,15 @@ clusters(Nodes) ->
 %% Cluster management
 %%--------------------------------------------------------------------------------
 
+%% @doc Join the local site to the cluster of a remote node.
+%%
+%% This function allows a node to join a cluster by connecting to a known peer.
+%%
+%% @param Node The node to join to
+%% @param Intent The intent of the join operation.
+%% Intent is an arbitrary term passed to `pre_join' callback.
+%% The callback is free to interpret it according to the business
+%% logic requirements.
 -spec join_node(node(), join_intent()) -> ok | {error, _}.
 join_node(Node, Intent) ->
   classy_node:join_node(Node, Intent, any).
