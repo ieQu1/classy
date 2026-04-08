@@ -261,16 +261,16 @@ wakeup(After, S = #s{t = T0}) ->
   S#s{t = T}.
 
 with_strategy(Fun) ->
-    case classy_lib:discovery_strategy() of
-        {manual, _} ->
-            ignore;
-        {singleton, _} ->
-            ignore;
-        undefined ->
-            ignore;
-        {Strategy, Options} ->
-            Fun(strategy_module(Strategy), Options)
-    end.
+  case classy_lib:discovery_strategy() of
+    {manual, _} ->
+      ignore;
+    {singleton, _} ->
+      ignore;
+    undefined ->
+      ignore;
+    {Strategy, Options} ->
+      Fun(strategy_module(Strategy), Options)
+  end.
 
 -spec strategy_module(atom()) -> module().
 strategy_module(Strategy) ->
