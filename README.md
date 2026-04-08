@@ -175,7 +175,7 @@ Peer discovery retry interval.
 By default, classy initializes site to a random value,
 and the same value is used for the cluster ID.
 
-Business applications can override this behavior by registering `on_node_init` hook containing a call to `classy_node:maybe_init_the_cluster`:
+Business applications can override this behavior by registering `on_node_init` hook containing a call to `classy_node:maybe_init_the_site`:
 
 ```
 classy:on_node_init(
