@@ -105,7 +105,7 @@ app_name() ->
 init(_) ->
   process_flag(trap_exit, true),
   S = #s{},
-  {ok, S}.
+  {ok, wakeup_if_single(0, S)}.
 
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
@@ -161,7 +161,7 @@ terminate(Reason, _S) ->
 handle_discover(S0) ->
   S = S0#s{t = undefined},
   discover_and_join(),
-  wakeup(S).
+  wakeup_if_single(S).
 
 -spec discover_and_join() -> ok | ignore | {error, _}.
 discover_and_join() ->
@@ -174,8 +174,10 @@ discover_and_join() ->
                 {ok, Cluster, Nodes} ?= discover(Mod, Options),
                 try_join(Cluster, Nodes)
               else
+                ignore ->
+                  ignore;
                 Other ->
-                  log_error("Discover and join", Other),
+                  logger:error("Discover and join error: ~p", [Other]),
                   ignore
               end
           end)
@@ -204,17 +206,18 @@ discover(Mod, Options) ->
   case Res of
     {ok, Candidates} ->
       Clusters = #{bad_nodes := BadNodes} = classy:clusters(Candidates),
+      ?tp(warning, partitions_clusters, #{cl => Clusters}),
       BadNodes =/= [] andalso
         logger:info("discovered nodes are not responding: ~p", [BadNodes]),
       case classy_hook:first_match(?on_pre_autocluster, [Candidates, Clusters]) of
         {ok, {Cluster, Nodes}} ->
           {ok, Cluster, filter_discovered_nodes(Candidates, BadNodes, Nodes)};
         _ ->
-          undefined
+          ignore
       end;
     Other ->
       log_error("Discover", Other),
-      undefined
+      ignore
   end.
 
 filter_discovered_nodes(Candidates, BadNodes, Nodes) ->
@@ -251,9 +254,18 @@ try_join(Cluster, [Node | Rest]) ->
 %%       false
 %%   end.
 
--spec wakeup(#s{}) -> #s{}.
-wakeup(S) ->
-  wakeup(discovery_interval(), S).
+-spec wakeup_if_single(#s{}) -> #s{}.
+wakeup_if_single(S) ->
+  wakeup_if_single(discovery_interval(), S).
+
+-spec wakeup_if_single(non_neg_integer(), #s{}) -> #s{}.
+wakeup_if_single(Interval, S) ->
+  case classy:sites() of
+    [_, _ | _] ->
+      S#s{t = undefined};
+    _ ->
+      wakeup(Interval, S)
+  end.
 
 -spec wakeup(non_neg_integer(), #s{}) -> #s{}.
 wakeup(After, S = #s{t = T0}) ->
@@ -274,12 +286,7 @@ with_strategy(Fun) ->
 
 -spec strategy_module(atom()) -> module().
 strategy_module(Strategy) ->
-  list_to_atom("classy_discovery_" ++  atom_to_list(Strategy)).
-  %% This is hopefully unused:
-  %% case code:is_loaded(Strategy) of
-  %%   {file, _} -> Strategy; %% Provider?
-  %%   false     -> list_to_atom("classy_discovery_" ++  atom_to_list(Strategy))
-  %% end.
+  list_to_atom("classy_discovery_" ++ atom_to_list(Strategy)).
 
 -spec discovery_interval() -> pos_integer().
 discovery_interval() ->

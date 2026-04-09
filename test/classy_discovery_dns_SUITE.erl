@@ -77,13 +77,13 @@ t_discover(_) ->
     ok.
 
 t_lock(_) ->
-    ignore = classy_discovery_strategy:lock(classy_discovery_dns, #{}).
+    ok = classy_discovery_strategy:lock(classy_discovery_dns, #{}).
 
 t_unlock(_) ->
-    ignore = classy_discovery_strategy:unlock(classy_discovery_dns, #{}).
+    ok = classy_discovery_strategy:unlock(classy_discovery_dns, #{}).
 
 t_register(_) ->
-    ignore = classy_discovery_strategy:register(classy_discovery_dns, #{}).
+    ok = classy_discovery_strategy:register(classy_discovery_dns, #{}).
 
 t_unregister(_) ->
-    ignore = classy_discovery_strategy:unregister(classy_discovery_dns, #{}).
+    ok = classy_discovery_strategy:unregister(classy_discovery_dns, #{}).

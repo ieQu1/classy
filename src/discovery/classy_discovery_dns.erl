@@ -48,13 +48,13 @@ node_name(NodeName, Host) ->
   list_to_atom(lists:concat([NodeName, "@", Host])).
 
 lock(_Options) ->
-  ignore.
+  ok.
 
 unlock(_Options) ->
-  ignore.
+  ok.
 
 register(_Options) ->
-  ignore.
+  ok.
 
 unregister(_Options) ->
-  ignore.
+  ok.

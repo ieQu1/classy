@@ -29,13 +29,13 @@ discover(Options) ->
   {ok, maps:get(seeds, Options, [])}.
 
 lock(_Options) ->
-  ignore.
+  ok.
 
 unlock(_Options) ->
-  ignore.
+  ok.
 
 register(_Options) ->
-  ignore.
+  ok.
 
 unregister(_Options) ->
-  ignore.
+  ok.

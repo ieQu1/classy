@@ -405,7 +405,8 @@ t_080_desync(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
-%% This testcase verifies `classy:info()' function
+%% This testcase verifies `classy:info()' and
+%% `classy_node:cluster_info/0' and `classy:clusters/1' functions.
 t_090_info(_Config) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
@@ -421,19 +422,60 @@ t_090_info(_Config) ->
        N2 = create_start_site(S2, #{}),
        [?ON(I, classy:enrich_site_info(EnrichInfo, 0))
         || I <- Sites],
+       %% Verify functions in singleton clusters:
+       {ok, Cluster1, [{S1, N1}]} = ?ON(S1, classy_node:cluster_info()),
+       {ok, Cluster2, [{S2, N2}]} = ?ON(S2, classy_node:cluster_info()),
+       ?assertMatch(
+          #{ clusters  := #{ Cluster1 := [[{S1, N1}]]
+                           , Cluster2 := [[{S2, N2}]]
+                           }
+           , bad_nodes := ['fake@node.local']
+           },
+          ?ON(S1, classy:clusters([N1, N2, 'fake@node.local']))),
        %% Form cluster:
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
-       %% Verify info:
+       %% Verify `classy:info':
        [?assertMatch(
            #{ hello   := world
             , site    := I
-            , cluster := Cluster
+            , cluster := Cluster1
             , peers   := #{ S1 := #{node := _, up := true, last_update := _}
                           , S2 := #{node := _, up := true, last_update := _}
                           }
-            } when is_binary(Cluster),
+            },
            ?ON(I, classy:info()))
-        || I <- Sites]
+        || I <- Sites],
+       %% Verify cluster info:
+       #{ clusters  := #{Cluster1 := [Cluster1Peers]}
+        , bad_nodes := ['fake@node.local']
+        } = ?ON(S1, classy:clusters([N1, N2, 'fake@node.local'])),
+       ?assertSameSet(
+          [{S1, N1}, {S2, N2}],
+          Cluster1Peers)
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
+%% This testcase verifies basic functionality of autocluster.
+t_100_autocluster(_Config) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  Sites = [S1, S2],
+  Strategy = {static, #{seeds => [fuzz_node_name(I) || I <- Sites]}},
+  AppConf = {classy_test_app,
+             #{ app => classy
+              , env => #{discovery_strategy => Strategy}}
+              },
+  Conf = #{fixtures => [AppConf]},
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       %% Prepare system:
+       _N1 = create_start_site(S1, Conf),
+       _N2 = create_start_site(S2, Conf),
+       %% Wait for the autocluster to do its job:
+       ?block_until(#{?snk_kind := classy_member_join})
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1

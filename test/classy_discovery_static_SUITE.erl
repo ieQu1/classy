@@ -29,13 +29,13 @@ t_discover(_) ->
   {ok, ['ekka@127.0.0.1']} = classy_discovery_static:discover(Options).
 
 t_lock(_) ->
-  ignore = classy_discovery_static:lock([]).
+  ok = classy_discovery_static:lock([]).
 
 t_unlock(_) ->
-  ignore = classy_discovery_static:unlock([]).
+  ok = classy_discovery_static:unlock([]).
 
 t_register(_) ->
-  ignore = classy_discovery_static:register([]).
+  ok = classy_discovery_static:register([]).
 
 t_unregister(_) ->
-  ignore = classy_discovery_static:unregister([]).
+  ok = classy_discovery_static:unregister([]).

@@ -129,7 +129,7 @@ clusters(Nodes) ->
                 classy_lib:rpc_timeout()),
   {Clusters, BadNodes} =
     lists:foldl(
-      fun({_Node, {ok, Cluster, Peers0}}, {AccClusters0, AccBadNodes}) ->
+      fun({_Node, {ok, {ok, Cluster, Peers0}}}, {AccClusters0, AccBadNodes}) ->
           Peers = lists:sort(Peers0),
           AccClusters = maps:update_with(
                           Cluster,

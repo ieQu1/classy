@@ -71,16 +71,16 @@ node_name(App, Addr, _, _, _, _) ->
   list_to_atom(App ++ "@" ++ binary_to_list(Addr)).
 
 lock(_Options) ->
-  ignore.
+  ok.
 
 unlock(_Options) ->
-  ignore.
+  ok.
 
 register(_Options) ->
-  ignore.
+  ok.
 
 unregister(_Options) ->
-  ignore.
+  ok.
 
 %%--------------------------------------------------------------------
 %% Internal functions
