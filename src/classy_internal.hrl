@@ -43,6 +43,7 @@
 %% Trace events
 -define(classy_unknown_event, classy_unknown_event).
 -define(classy_abnormal_exit, classy_abnormal_exit).
+-define(classy_table_anomaly, classy_table_anomaly).
 
 %% Site information:
 -define(site_info, classy_site_status_tab).

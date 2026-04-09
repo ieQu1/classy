@@ -639,7 +639,7 @@ no_unexpected_events(Trace) ->
      ?of_kind(
         [ ?classy_unknown_event
         , ?classy_abnormal_exit
-        , classy_table_aborted_compaction
+        , ?classy_table_anomaly
         , classy_hook_failure
         , classy_discovery_failure
         , classy_table_on_update_callback_failure
