@@ -8,11 +8,12 @@
 %% API:
 -export([ start_link/0
         , maybe_init_the_site/1
-        , join_node/2
+        , join_node/3
         , kick_site/2
         , the_site/0
         , the_cluster/0
         , nodes/1
+        , peer_info/0
 
         , at_lower_level/2
         ]).
@@ -21,7 +22,9 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([hello/0]).
+-export([ hello/0
+        , cluster_info/0
+        ]).
 
 -export_type([run_level_atom/0]).
 
@@ -40,7 +43,11 @@
 -define(the_site, the_site).
 -define(the_cluster, the_cluster).
 
--record(call_join, {node :: node(), intent :: term()}).
+-record(call_join,
+        { node :: node()
+        , intent :: term()
+        , cluster :: classy:cluster_id() | any
+        }).
 -record(call_kick, {site :: classy:site(), intent :: term()}).
 -record(cast_membership_change,
         { cluster :: classy:cluster_id()
@@ -94,15 +101,15 @@ the_site() ->
 %% @doc Join to the cluster that `Node' belongs to.
 %%
 %% This function performs all necessary checks before making any changes.
--spec join_node(node(), _Intent) -> ok | {error, _}.
-join_node(Node, Intent) ->
+-spec join_node(node(), _Intent, classy:cluster_id() | any) -> ok | {error, _}.
+join_node(Node, Intent, ExpectedCluster) ->
   case node() of
     Node ->
       ok;
     _ ->
       gen_server:call(
         ?SERVER,
-        #call_join{node = Node, intent = Intent},
+        #call_join{node = Node, intent = Intent, cluster = ExpectedCluster},
         infinity)
   end.
 
@@ -145,6 +152,19 @@ nodes(Query) ->
        },
   ets:select(?site_info, [MS]).
 
+-spec peer_info() -> #{classy:site() => classy:peer_info()}.
+peer_info() ->
+  ets:foldl(
+    fun(#classy_kv{k = Site, v = #site_info{node = Node, isup = IsUp, last_update = LU}}, Acc) ->
+        Info = #{ node        => Node
+                , up          => IsUp
+                , last_update => LU
+                },
+        Acc#{Site => Info}
+    end,
+    #{},
+    ?site_info).
+
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
@@ -175,8 +195,8 @@ init(_) ->
   end.
 
 %% @private
-handle_call(#call_join{node = Node, intent = Intent}, _From, S0) ->
-  case handle_join(Node, S0, Intent) of
+handle_call(#call_join{} = Call, _From, S0) ->
+  case handle_join(S0, Call) of
     {ok, S} ->
       {reply, ok, S};
     Err ->
@@ -259,14 +279,31 @@ hello() ->
   maybe
     {ok, Cluster} ?= the_cluster(),
     {ok, Site} ?= the_site(),
+    {ok, MemData} ?= classy_membership:get_data(Cluster, Site, 0, 0),
     #{ site => Site
      , cluster => Cluster
      , pid => whereis(?SERVER)
-     , mem_data => classy_membership:get_data(Cluster, Site, 0, 0)
+     , mem_data => MemData
      }
   else
+    undefined ->
+      {error, not_in_cluster};
+    Err ->
+      Err
+  end.
+
+%% @doc RPC target
+-spec cluster_info() -> {ok, classy:cluster_id(), [{classy:site(), node()}]} | error.
+cluster_info() ->
+  maybe
+    {ok, Cluster} ?= the_cluster(),
+    {ok, Site} ?= the_site(),
+    Peers = classy_membership:members(Cluster, Site),
+    Nodes = classy_membership:node_of_site(Cluster, Site),
+    {ok, Cluster, [{I, maps:get(I, Nodes, undefined)} || I <- Peers]}
+  else
     _ ->
-      {error, not_in_cluster}
+      error
   end.
 
 %%================================================================================
@@ -302,6 +339,7 @@ handle_membership_change_event(
       %% We got kicked:
       ?tp(warning, classy_kicked_remotely,
           #{ cluster => Cluster
+           , local   => ThisSite
            }),
       case on_leave(S0, kicked) of
         {ok, S}      -> {noreply, S};
@@ -328,21 +366,30 @@ handle_kick(Cluster, Local, Target, Intent) ->
       Err
   end.
 
-handle_join(Node, S, Intent) ->
+handle_join(S, Call) ->
+  #call_join{ node    = Node
+            , cluster = ExpectedCluster
+            , intent  = Intent
+            } = Call,
   case rpc:call(Node, ?MODULE, hello, [], classy_lib:rpc_timeout()) of
     #{ site := Remote
      , cluster := Cluster
      , pid := _RemotePid
      , mem_data := MemData
-     } ->
+     } when Cluster =:= ExpectedCluster;
+            ExpectedCluster =:= any ->
       case classy_hook:all(?on_pre_join, [Cluster, Remote, Node, Intent]) of
         ok ->
           do_join_node(Node, Cluster, Remote, MemData, S);
         {error, _} = Err ->
           Err
       end;
+    #{cluster := Cluster} ->
+      {error, {cluster_changed, #{ExpectedCluster => Cluster}}};
+    {error, _} = Err ->
+      Err;
     Err ->
-      {error, Err}
+      {error, {bad_hello, Err}}
   end.
 
 -spec do_join_node(
@@ -359,7 +406,7 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
     {ok, Cluster} ->
       %% Already in the same cluster with `Node'. Set our membership
       %% status and trigger re-sync (do we need to re-run hooks?):
-      classy_membership:cast_sync(Cluster, Local, MemData),
+      classy_membership:call_sync(Cluster, Local, MemData),
       classy_membership:set_member(Cluster, Local, Local, true),
       classy_membership:flush(Cluster, Local),
       {ok, update_runtime(S0)};
@@ -375,7 +422,7 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
       end;
     undefined ->
       %% Site is not in any cluster:
-      {ok, S} = join_cluster(Cluster, Local, S0),
+      {ok, S} = join_cluster(Cluster, Node, Local, S0),
       do_join_node(Node, Cluster, Remote, MemData, S)
   end.
 
@@ -391,9 +438,9 @@ on_leave(S0 = #s{cluster = Cluster, site = Local}, Intent) ->
       init_cluster()
   end.
 
-join_cluster(Cluster, Local, S = #s{run_level = 0}) ->
+join_cluster(Cluster, JoinToNode, Local, S = #s{run_level = 0}) ->
   {ok, _} = classy_sup:ensure_membership(Cluster, Local),
-  classy_hook:foreach(?on_post_join, [Cluster, Local]),
+  classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode]),
   set_val(?the_cluster, Cluster),
   {ok, S#s{cluster = Cluster}}.
 
@@ -445,6 +492,7 @@ init_cluster() ->
     {ok, Site} ?= the_site(),
     logger:update_process_metadata(#{local => Site}),
     {ok, _} = classy_sup:ensure_membership(Cluster, Site),
+    start_old_clusters(Site),
     S = update_runtime(
           #s{ cluster = Cluster
             , site = Site
@@ -502,6 +550,18 @@ change_run_level(To, #s{run_level = From} = S) when To >= 0, To =< 3 ->
          end,
   classy_hook:foreach(?on_change_run_level, [run_level(From), run_level(Next)]),
   change_run_level(To, S#s{run_level = Next}).
+
+%% Start membership processes for all known former clusters, in order
+%% to relay information to former peers.
+start_old_clusters(Site) ->
+  maps:foreach(
+    fun(Cluster, Peers) ->
+        case Peers -- [Site] of
+          []      -> ok;
+          [_ | _] -> classy_sup:ensure_membership(Cluster, Site)
+        end
+    end,
+    classy_membership:known_clusters(Site)).
 
 -spec run_level(run_level_int()) -> run_level_atom();
                (run_level_atom()) -> run_level_int().

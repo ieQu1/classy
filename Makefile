@@ -28,15 +28,17 @@ test: smoke-test #concuerror_test
 
 .PHONY: smoke-test
 smoke-test:
-	$(REBAR) eunit
-	$(REBAR) ct --name ct -v --cover
-
-cover: | smoke-test
-	$(REBAR) cover
+	$(REBAR) eunit --cover
+	$(REBAR) ct --name ct@127.0.0.1 --verbose --cover --readable false
+	$(REBAR) cover -v
 
 .PHONY: coveralls
 coveralls:
 	@rebar3 as test coveralls send
+
+.PHONY: fuzz
+fuzz:
+	$(REBAR) ct --name ct@127.0.0.1 --verbose --cover --suite classy_SUITE --case t_999_fuzz --readable false
 
 ##########################################################################################
 # Concuerror

@@ -112,12 +112,96 @@ Unit: ms.
 
 Autoclean check interval.
 
+## `classy.discovery_strategy`
+
+Peer discovery method.
+
+### Manual
+
+`{manual, _}`
+
+Disable automatic cluster discovery.
+This is the default strategy.
+
+### Static
+
+`{static, #{seeds => [node()]}}`
+
+Join to one of the nodes explicitly specified in the list.
+
+### DNS
+
+```
+{dns, #{
+  name := string(),
+  type => a | aaaa | srv,
+  app  => string() | atom()
+}}
+```
+
+Discover peers via DNS query.
+
+- `name`: Domain name
+- `type`: type of the DNS record (default: `a`)
+- `app`: Node name prefix (default: `classy_autocluster:app_name()`)
+
+Node names are derived using the following template: `App@Hostname`
+where `App` is the value of `app` configuration option,
+and `Hostname` is derived from the DNS response.
+
+When `a` or `aaaa` type is used, hostnames become IP addresses.
+It's recommended to use SRV records.
+
+### K8S
+
+```
+{k8s, #{
+  namespace := string(),
+  app       := string(),
+  port      := pos_integer()
+}}
+```
+
+Discover peers via Kubernetes service discovery.
+
+- `namespace`: Kubernetes namespace to search for services
+- `app`: Kubernetes application name (service name prefix)
+- `port`: Erlang distribution port number to use for node connections
+
+This strategy queries the Kubernetes API at `/api/v1/namespaces/{namespace}/endpoints/{app}` to discover peer nodes.
+
+### etcd
+
+TODO
+
+```
+{etcd, #{
+  endpoints := [string()],
+  prefix    := string()
+}}
+```
+
+Discover peers via etcd service discovery.
+
+- `endpoints`: List of etcd endpoints to connect to
+- `prefix`: Key prefix to use for service discovery
+
+## `classy.discovery_interval`
+
+Type: `pos_integer()`.
+
+Unit: ms.
+
+Default: 5_000.
+
+Peer discovery retry interval.
+
 # Setting default site and cluster
 
 By default, classy initializes site to a random value,
 and the same value is used for the cluster ID.
 
-Business applications can override this behavior by registering `on_node_init` hook containing a call to `classy_node:maybe_init_the_cluster`:
+Business applications can override this behavior by registering `on_node_init` hook containing a call to `classy_node:maybe_init_the_site`:
 
 ```
 classy:on_node_init(

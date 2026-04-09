@@ -13,6 +13,7 @@
         , n_sites/0
         , time_s/0
         , adjust_time_s_skew/2
+        , discovery_strategy/0
 
         , wakeup_after/3
         , cancel_wakeup/1
@@ -44,6 +45,10 @@ rpc_timeout() ->
 n_sites() ->
   application:get_env(classy, n_sites, 1).
 
+%% @doc Read `discovery_strategy' environment variable (with default)
+discovery_strategy() ->
+  application:get_env(classy, discovery_strategy, {manual, []}).
+
 %% @doc Adjust a local timestamp `Val' to the remote nodes's clock,
 %% given the remote's "current" time `RemoteTimeS' at the time of the
 %% call.
@@ -54,6 +59,7 @@ adjust_time_s_skew(RemoteTimeS, Val) ->
 -ifndef(CONCUERROR).
 
 %% @doc Return Unix time in seconds.
+-spec time_s() -> unix_time_s().
 time_s() ->
   os:system_time(second).
 
@@ -87,7 +93,7 @@ cancel_wakeup({_, TRef}) ->
   undefined.
 
 %% @doc Send exit signal `Reason' to a process and wait for the shutdown.
--spec sync_stop_proc(pid() | atom(), _ExitReason, timeout()) -> ok.
+-spec sync_stop_proc(pid() | atom(), _ExitReason, timeout()) -> ok | {error, timeout}.
 sync_stop_proc(undefined, _, _) ->
   ok;
 sync_stop_proc(Name, Reason, Timeout) when is_atom(Name) ->

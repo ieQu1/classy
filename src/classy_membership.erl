@@ -11,7 +11,8 @@
 -behavior(gen_server).
 
 %% API:
--export([ set_member/4
+-export([ known_clusters/1
+        , set_member/4
         , members/2
         , list_local_sites/1
         , get_data/4
@@ -25,9 +26,13 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([start_link/2, cast_sync/3]).
+-export([start_link/2, cast_sync/3, call_sync/3]).
 
--export_type([start_args/0, op/0, ord/0, clock/0, sync_data/0]).
+-ifdef(TEST).
+-export([reset_acked_out/4]).
+-endif.
+
+-export_type([start_args/0, op/0, ord/0, clock/0, sync_data/0, pk_last/0, pv_last/0]).
 
 -include("classy_internal.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
@@ -35,6 +40,8 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
+
+-define(call_timeout, infinity).
 
 %%================================================================================
 %% Type declarations
@@ -99,7 +106,7 @@
 
 -record(call_set, {target :: classy:site(), k :: site_prop(), v :: term()}).
 -record(call_cleanup, {forget_after :: pos_integer()}).
--record(call_sync, {}).
+-record(call_flush, {}).
 -record(call_get_data, {since :: clock(), acked :: clock()}).
 
 -record(s,
@@ -138,6 +145,25 @@
 %% API functions
 %%================================================================================
 
+%% @doc Return collection of clusters where site is or was peer.
+-spec known_clusters(classy:site()) -> #{classy:cluster_id() => [classy:site()]}.
+known_clusters(Site) ->
+  ets:foldl(
+    fun(#classy_kv{k = K}, Acc) ->
+        case K of
+          #pk_last{c = Cluster, l = Local, r = Remote} when Local =:= Site ->
+            maps:update_with(
+              Cluster,
+              fun(L) -> [Remote | L] end,
+              [Remote],
+              Acc);
+          _ ->
+            Acc
+        end
+    end,
+    #{},
+    ?ptab).
+
 %% @doc Low-level call that sets `Target''s membership state to `true'.
 %%
 %% WARNING: this function does not check if target site exists and/or is part of cluster.
@@ -148,7 +174,10 @@
 -spec set_member(classy:cluster_id(), classy:site(), classy:site(), boolean()) -> ok | {error, _}.
 set_member(Cluster, Local, Target, Mem) when is_boolean(Mem) ->
   try
-    gen_server:call(?via(Cluster, Local), #call_set{target = Target, k = ?mem, v = Mem}, infinity)
+    gen_server:call(
+      ?via(Cluster, Local),
+      #call_set{target = Target, k = ?mem, v = Mem},
+      ?call_timeout)
   catch
     EC:Err -> {error, {EC, Err}}
   end.
@@ -203,12 +232,28 @@ node_of_site(Cluster, Local) ->
 %% `ForgetAfter' from the local state.
 -spec cleanup(classy:cluster_id(), classy:site(), pos_integer()) -> ok.
 cleanup(Cluster, Local, ForgetAfter) ->
-  gen_server:call(?via(Cluster, Local), #call_cleanup{forget_after = ForgetAfter}).
+  gen_server:call(
+    ?via(Cluster, Local),
+    #call_cleanup{forget_after = ForgetAfter},
+    ?call_timeout).
 
 %% @doc Force sending of events and execution of hooks.
 -spec flush(classy:cluster_id(), classy:site()) -> ok.
 flush(Cluster, Local) ->
-  gen_server:call(?via(Cluster, Local), #call_sync{}).
+  gen_server:call(
+    ?via(Cluster, Local),
+    #call_flush{},
+    ?call_timeout).
+
+-ifdef(TEST).
+
+reset_acked_out(Cluster, Local, Remote, Clock) ->
+  classy_table:dirty_write(
+    ?ptab,
+    #pk_acked_out{c = Cluster, l = Local, r = Remote},
+    Clock).
+
+-endif.
 
 %%================================================================================
 %% Internal exports
@@ -222,13 +267,31 @@ start_link(Cluster, Local) ->
 
 %% @doc Send membership data to the process
 -spec cast_sync(classy:cluster_id(), classy:site(), sync_data()) -> ok.
-cast_sync(Cluster, Site, Cast) ->
-  gen_server:cast(?via(Cluster, Site), Cast).
+cast_sync(Cluster, Site, SyncData) ->
+  gen_server:cast(?via(Cluster, Site), SyncData).
+
+%% @doc Send membership data to the process
+-spec call_sync(classy:cluster_id(), classy:site(), sync_data()) -> ok.
+call_sync(Cluster, Site, SyncData) ->
+  ?tp(debug, classy_membership_call_sync,
+      #{ clus => Cluster
+       , local => Site
+       , clock => #cast_sync.c
+       }),
+  gen_server:call(?via(Cluster, Site), SyncData, ?call_timeout).
 
 %% @doc Get membership data
--spec get_data(classy:cluster_id(), classy:site(), clock(), clock()) -> sync_data().
+-spec get_data(classy:cluster_id(), classy:site(), clock(), clock()) -> {ok, sync_data()} | {error, _}.
 get_data(Cluster, Local, Since, Acked) ->
-  gen_server:call(?via(Cluster, Local), #call_get_data{since = Since, acked = Acked}).
+  try
+    gen_server:call(
+      ?via(Cluster, Local),
+      #call_get_data{since = Since, acked = Acked},
+      5_000)
+  catch
+    exit:{noproc, _} ->
+      {error, not_in_cluster}
+  end.
 
 %%================================================================================
 %% behavior callbacks
@@ -275,12 +338,17 @@ handle_call(#call_set{} = CMD, _From, S0) ->
   S = local_command(CMD, S0),
   {reply, ok, S};
 handle_call(#call_get_data{since = Since, acked = Acked}, _From, S) ->
-  {reply, get_sync_data(Since, Acked, S), S};
+  Reply = {ok, get_sync_data(Since, Acked, S)},
+  {reply, Reply, S};
 handle_call(#call_cleanup{forget_after = FA}, _From, S) ->
   Reply = handle_cleanup(FA, S),
   {reply, Reply, S};
-handle_call(#call_sync{}, _From, S0) ->
-  S = handle_sync(S0),
+handle_call(#call_flush{}, _From, S0) ->
+  S = handle_flush(S0),
+  {reply, ok, S};
+handle_call(#cast_sync{} = Req, _From, S0) ->
+  S = handle_sync_in(Req, S0),
+  run_hooks(S),
   {reply, ok, S};
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
@@ -308,7 +376,7 @@ handle_cast(Cast, S) ->
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
 handle_info(#to_sync_out{}, S0) ->
-  S = handle_sync(S0#s{sync_timer = undefined}),
+  S = handle_flush(S0#s{sync_timer = undefined}),
   {noreply, need_sync(S)};
 handle_info(Info, S) ->
   ?tp(warning, ?classy_unknown_event,
@@ -333,7 +401,7 @@ terminate(Reason, #s{cluster = Cluster, site = Site}) ->
 %% Internal functions
 %%================================================================================
 
-handle_sync(S0) ->
+handle_flush(S0) ->
   ok = classy_table:flush(?ptab),
   S = handle_sync_out(S0),
   run_hooks(S),
@@ -379,6 +447,13 @@ local_command(C, #call_set{target = Target, k = K, v = V}, S = #s{site = Local})
               , val = V
               , owt = classy_lib:time_s()
               },
+  ?tp(debug, classy_membership_local_command,
+      #{ c => C
+       , local => Local
+       , k => K
+       , clus => S#s.cluster
+       , gcl => S#s.clock
+       }),
   _ = merge(C, Op, S),
   need_sync(S).
 
@@ -397,7 +472,8 @@ handle_sync_in(Req, S0) ->
        , acked => AckedOut
        , data => Data
        }),
-  case get_acked_in(From, S0) >= Since of
+  AckedIn = get_acked_in(From, S0),
+  case AckedIn >= Since of
     true ->
       {Cl, S} = inc_get_clock(sync_clock(Cf, S0)),
       lists:foreach(
@@ -409,6 +485,14 @@ handle_sync_in(Req, S0) ->
      false ->
       %% Gap in sequence. Ignore this message. Peer will be notified
       %% about the expected acked value during the next sync-out:
+      ?tp(debug, classy_membership_sync_gap,
+          #{ acked => {AckedIn, Since}
+           , from => From
+           , c => Cf
+           , data => Data
+           }),
+      %% Always set remoted acked counter to heal the gap:
+      set_acked_out(From, AckedOut, S0),
       need_sync(S0)
   end.
 
@@ -672,6 +756,7 @@ set_acked_in(Site, Clock, #s{cluster = Cluster, site = Local}) ->
     ?ptab,
     #pk_acked_in{c = Cluster, l = Local, r = Site},
     Clock).
+
 -spec set_acked_out(classy:site(), clock(), #s{}) -> ok.
 set_acked_out(Site, Clock, #s{cluster = Cluster, site = Local}) ->
   classy_table:dirty_write(

@@ -55,7 +55,7 @@ t_010_cluster(_Conf) ->
      ]).
 
 %% This testcase verifies happy case of joining one node to another:
-t_020_join(Conf) ->
+t_020_join(_Conf) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   ?check_trace(
@@ -114,15 +114,15 @@ t_020_join(Conf) ->
         fun(Trace) ->
             ?assert(
                ?strict_causality(
-                  #{?snk_kind := classy_pre_join_node, cluster := C},
-                  #{?snk_kind := classy_joined_cluster, cluster := C},
+                  #{?snk_kind := classy_pre_join_node, cluster := _C},
+                  #{?snk_kind := classy_joined_cluster, cluster := _C},
                   Trace))
         end}
      , fun events_on_all_sites/1
      ]).
 
 %% This testcase verifies happy case of kicking node from the cluster:
-t_030_kick(Conf) ->
+t_030_kick(_Conf) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
@@ -146,6 +146,10 @@ t_030_kick(Conf) ->
            Sites,
            ?ON(I, classy:sites()))
         || I <- Sites],
+       %% Try to kick non-existent nodes, it should fail:
+       ?assertMatch(
+          {error, target_not_in_cluster},
+          ?ON(S1, classy:kick_node('fake@node.local', force))),
        %% Kick N1 from the cluster from N3:
        {ok, SubRef} = snabbkaffe:subscribe(?match_event(#{?snk_kind := classy_init_clustering})),
        ?assertMatch(ok, ?ON(S3, classy:kick_node(N1, force))),
@@ -170,7 +174,7 @@ t_030_kick(Conf) ->
      ]).
 
 %% Verify that node can be kicked from the cluster while down:
-t_040_kick_in_absentia(Conf) ->
+t_040_kick_in_absentia(_Conf) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
@@ -228,8 +232,8 @@ t_040_kick_in_absentia(Conf) ->
             ?assertMatch(
                [_],
                [I || I = #{ ?snk_kind := classy_kicked_remotely
-                          , ?snk_meta := #{node := N1}
-                          } <- Trace])
+                          , ?snk_meta := #{node := N}
+                          } <- Trace, N =:= N1])
         end}
      , fun no_unexpected_events/1
      , fun events_on_all_sites/1
@@ -286,13 +290,14 @@ t_050_pre_checks(_Conf) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies functionality of `at_lower_level' API.
 t_060_at_lower_level(_Config) ->
   S1 = <<"s1">>,
   ?check_trace(
      #{timetrap => 20_000},
      begin
        %% Prepare the system:
-       N1 = create_start_site(S1, #{}),
+       _N1 = create_start_site(S1, #{}),
        timer:sleep(1000),
        ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
        ?assertMatch(
@@ -317,6 +322,7 @@ t_060_at_lower_level(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies site autoclean functionality
 t_070_cleanup(_Config) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
@@ -334,8 +340,8 @@ t_070_cleanup(_Config) ->
      begin
        %% Prepare system:
        N1 = create_start_site(S1, Conf),
-       N2 = create_start_site(S2, Conf),
-       N3 = create_start_site(S3, Conf),
+       _N2 = create_start_site(S2, Conf),
+       _N3 = create_start_site(S3, Conf),
        {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
        ?assertMatch(ok, ?ON(S3, classy:join_node(N1, join))),
@@ -359,6 +365,129 @@ t_070_cleanup(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies that sites that membership CRDT recovers
+%% from lost packets. Packet loss is emulated by setting "acked_out"
+%% counters to higher values.
+t_080_desync(_Config) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       %% Prepare system:
+       N1 = create_start_site(S1, #{}),
+       _N2 = create_start_site(S2, #{}),
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       #{cluster := Cluster} = ?ON(S1, classy_node:hello()),
+       %% Emulate de-sync by setting counters to very high values:
+       ?force_ordering(
+          #{?snk_kind := test_proceed},
+          #{?snk_kind := classy_membership_sync_out}),
+       ?ON(S1, classy_membership:reset_acked_out(Cluster, S1, S2, 1000)),
+       ?ON(S2, classy_membership:reset_acked_out(Cluster, S2, S1, 1000)),
+       ?tp(test_proceed, #{}),
+       %% Wait until one of the sites detects the gap:
+       ?block_until(#{?snk_kind := classy_membership_sync_gap}),
+       %% Connect the third site to make sure the CRDT is healed:
+       _N3 = create_start_site(S3, #{}),
+       ?assertMatch(ok, ?ON(S3, classy:join_node(N1, join))),
+       [?retry(
+           1000,
+           10,
+           ?assertSameSet(
+              Sites,
+              ?ON(I, classy:sites())))
+        || I <- Sites]
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
+%% This testcase verifies `classy:info()' and
+%% `classy_node:cluster_info/0' and `classy:clusters/1' functions.
+t_090_info(_Config) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  Sites = [S1, S2],
+  EnrichInfo = fun(Info) ->
+                   Info#{hello => world}
+               end,
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       %% Prepare system:
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       [?ON(I, classy:enrich_site_info(EnrichInfo, 0))
+        || I <- Sites],
+       %% Verify functions in singleton clusters:
+       {ok, Cluster1, [{S1, N1}]} = ?ON(S1, classy_node:cluster_info()),
+       {ok, Cluster2, [{S2, N2}]} = ?ON(S2, classy_node:cluster_info()),
+       ?assertMatch(
+          #{ clusters  := #{ Cluster1 := [[{S1, N1}]]
+                           , Cluster2 := [[{S2, N2}]]
+                           }
+           , bad_nodes := ['fake@node.local']
+           },
+          ?ON(S1, classy:clusters([N1, N2, 'fake@node.local']))),
+       %% Form cluster:
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       %% Verify `classy:info':
+       [?assertMatch(
+           #{ hello   := world
+            , site    := I
+            , cluster := Cluster1
+            , peers   := #{ S1 := #{node := _, up := true, last_update := _}
+                          , S2 := #{node := _, up := true, last_update := _}
+                          }
+            },
+           ?ON(I, classy:info()))
+        || I <- Sites],
+       %% Verify cluster info:
+       #{ clusters  := #{Cluster1 := [Cluster1Peers]}
+        , bad_nodes := ['fake@node.local']
+        } = ?ON(S1, classy:clusters([N1, N2, 'fake@node.local'])),
+       ?assertSameSet(
+          [{S1, N1}, {S2, N2}],
+          Cluster1Peers)
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
+%% This testcase verifies basic functionality of autocluster.
+t_100_autocluster(_Config) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  Sites = [S1, S2],
+  Strategy = {static, #{seeds => [fuzz_node_name(I) || I <- Sites]}},
+  AppConf = {classy_test_app,
+             #{ app => classy
+              , env => #{discovery_strategy => Strategy}}
+              },
+  Conf = #{fixtures => [AppConf]},
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       %% Prepare system:
+       _N1 = create_start_site(S1, Conf),
+       _N2 = create_start_site(S2, Conf),
+       %% Wait for the autocluster to do its job:
+       ?block_until(#{?snk_kind := classy_member_join})
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
+t_900_fuzz_bug(_Config) ->
+  ?check_trace(
+     begin
+       ok
+     end,
+     []).
+
 t_999_fuzz(_Config) ->
   %% NOTE: we set timeout at the lowest level to capture the trace
   %% and have a nicer error message.
@@ -367,93 +496,135 @@ t_999_fuzz(_Config) ->
   %% values to avoid blowing up CI. Hence it's recommended to
   %% increase the max_size and numtests when doing local
   %% development using "apps/emqx/test/sessds.cfg"
-  NTests = ct:get_config({fuzzer, n_tests}, 100),
+  NTests = ct:get_config({fuzzer, n_tests}, 20),
   MaxSize = ct:get_config({fuzzer, max_size}, 100),
-  NCommandsFactor = ct:get_config({fuzzer, command_multiplier}, 2),
-  ?run_prop(
-     #{ proper =>
-          #{ timeout => 3_000_000
-           , numtests => NTests
-           , max_size => MaxSize
-           , start_size => MaxSize
-           , max_shrinks => 0
-           }
-      },
-      ?forall_trace(
-         Cmds,
-         classy_test_fuzzer:cmds(
-           NCommandsFactor,
-           #{ module => ?MODULE
-            , sites => [ {<<"foo">>, #{}}
-                       , {<<"bar">>, #{}}
-                       , {<<"baz">>, #{}}
-                       , {<<"quux">>, #{}}
-                       ]
-            }),
-         #{timetrap => 5_000 * length(Cmds) + 30_000},
-         try
-           %% Print information about the run:
-           io:format(user, "*** Commands:~n~s~n", [classy_test_fuzzer:format_cmds(Cmds)]),
-           %% Initialize the system:
-           classy_test_cluster:start_link(
-             #{ peer => #{ args => ["-kernel", "prevent_overlapping_partitions", "false"]
-                         }
-              , fixtures => classy_test_fixture:defaults(?FUNCTION_NAME)
-              }),
-           %% Run test:
-           {_History, State, Result} = proper_statem:run_commands(classy_test_fuzzer, Cmds),
-           ct:log(info, "*** Model state:~n  ~p~n", [State]),
-           ct:log("*** Result:~n  ~p~n", [Result]),
-           %% Always verify the final state:
-           fuzz_verify(State),
-           Result =:= ok orelse error({invalid_result, Result})
-         after
-           ok = classy_test_cluster:stop(normal)
-         end,
-         [ fun no_unexpected_events/1
-         , fun events_on_all_sites/1
-         ])),
-  snabbkaffe:stop().
+  NCommandsFactor = ct:get_config({fuzzer, command_multiplier}, 1),
+  ?assertMatch(
+     true,
+     proper:quickcheck(
+       ?FORALL(
+          Cmds,
+          classy_test_fuzzer:cmds(
+            NCommandsFactor,
+            #{ module => ?MODULE
+             , sites => [ {<<"foo">>, #{}}
+                        , {<<"bar">>, #{}}
+                        , {<<"baz">>, #{}}
+                        , {<<"quux">>, #{}}
+                        ]
+             }),
+          try
+            fuzz_prop(Cmds),
+            true
+          catch
+            EC:Err:Stack ->
+              ct:pal("!!!! Property failed ~p:~p:~p", [EC, Err, Stack]),
+              false
+          end)
+      , [ {numtests, NTests}
+        , {max_size, MaxSize}
+        , {on_output, fun proper_printout/2}
+          %% TODO: Shrinking is currently broken
+        , {max_shrinks, 0}
+        ]
+      )).
 
-fuzz_verify({init, _}) ->
-  ok;
-fuzz_verify(S = #{sites := Sites}) ->
-  ct:sleep(1000),
+fuzz_prop(Cmds) ->
+  ?check_trace(
+     #{timetrap => 5_000 * length(Cmds) + 30_000},
+     try
+       %% Print information about the run:
+       ct:pal("*** Commands:~n~s~n", [classy_test_fuzzer:format_cmds(Cmds)]),
+       %% Initialize the system:
+       classy_test_cluster:start_link(
+         #{ peer => #{ args => ["-kernel", "prevent_overlapping_partitions", "false"]
+                     }
+          , fixtures => classy_test_fixture:defaults(?FUNCTION_NAME) ++ [{classy_test_snabbkaffe, #{}}]
+          }),
+       %% Run test:
+       {_History, State, Result} = proper_statem:run_commands(
+                                     classy_test_fuzzer,
+                                     classy_test_fuzzer:wrap_commands(Cmds)),
+       ct:log(info, "*** Model state:~n  ~p~n", [State]),
+       ct:log("*** Result:~n  ~p~n", [Result]),
+       Result =:= ok orelse error({invalid_result, Result}),
+       ok = classy_test_cluster:stop(normal)
+     after
+       ok = classy_test_cluster:stop(error)
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
+postcondition({init, _}, _Call, _Result) ->
+  true;
+postcondition(S, _Call, _Result) ->
   lists:foreach(
     fun(Site) ->
-        #{Site := #{cluster := Cluster}} = Sites,
-        ExpectedSites = classy_test_fuzzer:sites_of_cluster(Cluster, S),
-        %% Check cluster member sites:
-        ?retry(
-           1000,
-           10,
-           ?assertSameSet(
-              ExpectedSites,
-              classy_test_site:call(Site, classy, sites, []),
-              #{ on => Site
-               })),
-        %% Check all nodes:
-        ?retry(
-           100,
-           10,
-           ?assertSameSet(
-              [fuzz_node_name(I) || I <- ExpectedSites],
-              classy_test_site:call(Site, classy, nodes, [all]),
-              #{ on => Site
-               })),
-        ?retry(
-           100,
-           10,
-           ?assertSameSet(
-              [fuzz_node_name(I)
-               || I <- ExpectedSites,
-                  classy_test_fuzzer:is_running(I, S)],
-              classy_test_site:call(Site, classy, nodes, [running]),
-              #{ on => Site
-               })),
-        ok
+        ?retry(1000, 10, fuzz_verify_site(Site, S))
     end,
-    classy_test_fuzzer:running_sites(S)).
+    classy_test_fuzzer:running_sites(S)),
+  true.
+
+fuzz_verify_site(Site, S = #{sites := Sites}) ->
+  #{Site := #{cluster := Cluster, in_sync := InSync}} = Sites,
+  %% This property always holds, regardless of the sync status:
+  no_stopped_nodes_reported_as_running(Site, S),
+  %% Verify list of peer sites:
+  ExpectedSites = classy_test_fuzzer:sites_of_cluster(Cluster, S),
+  InSync andalso
+    ?assertSameSet(
+       ExpectedSites,
+       classy_test_site:call(Site, classy, sites, []),
+       #{ on => Site
+        , msg => "View of the cluster"
+        , diagnostic => diagnostic(Site, S)
+        , model_state => S
+        }),
+  %% Verify list of all nodes:
+  InSync andalso
+    ?assertSameSet(
+       [fuzz_node_name(I) || I <- ExpectedSites],
+       classy_test_site:call(Site, classy, nodes, [all]),
+       #{ on  => Site
+        , msg => "View of all nodes"
+        , diagnostic => diagnostic(Site, S)
+        , model_state => S
+        }),
+  %% Check running nodes:
+  InSync andalso
+    ?assertSameSet(
+       [fuzz_node_name(I)
+        || I <- ExpectedSites,
+           classy_test_fuzzer:is_running(I, S)],
+       classy_test_site:call(Site, classy, nodes, [running]),
+       #{ on  => Site
+        , msg => "View of running nodes"
+        , diagnostic => diagnostic(Site, S)
+        , model_state => S
+        }),
+  ok.
+
+%% This function fails if `Site' reports any site that must be stopped
+%% according to the spec as running.
+no_stopped_nodes_reported_as_running(Site, #{sites := Sites}) ->
+  StoppedNodes = maps:fold(
+                   fun(Peer, #{running := Running}, Acc) ->
+                       case Running of
+                         false -> [fuzz_node_name(Peer) | Acc];
+                         true  -> Acc
+                       end
+                   end,
+                   [],
+                   Sites),
+  Running = classy_test_site:call(Site, classy, nodes, [running]),
+  ?assertMatch(
+     Running,
+     Running -- StoppedNodes,
+     #{ msg => stopped_node_is_reported_as_running
+      , on_site => Site
+      , sites => Sites
+      }).
 
 fuzz_node_name(Site) ->
   binary_to_atom(<<Site/binary, "@127.0.0.1">>).
@@ -469,6 +640,9 @@ no_unexpected_events(Trace) ->
         [ ?classy_unknown_event
         , ?classy_abnormal_exit
         , classy_table_aborted_compaction
+        , classy_hook_failure
+        , classy_discovery_failure
+        , classy_table_on_update_callback_failure
         ],
         Trace)).
 
@@ -581,12 +755,8 @@ init_per_suite(Cfg) ->
 end_per_suite(Cfg) ->
   Cfg.
 
-general_commands(S) ->
-  [ {5, {call, ?MODULE, fuzz_verify, [S]}}
-  ].
-
-next_state(S, _Ret, {call, ?MODULE, fuzz_verify, _}) ->
-  S.
+next_state(_S, _Ret, Call) ->
+  error({unknown_call, Call}).
 
 init_per_testcase(t_999_fuzz, Cfg) ->
   Cfg;
@@ -620,7 +790,10 @@ end_per_testcase(_TC, Cfg) ->
   snabbkaffe:stop().
 
 all() ->
-  [I || {I, 1} <- module_info(exports), I > 't_', I < 't`'].
+  all(?MODULE).
+
+all(Module) ->
+  [I || {I, 1} <- Module:module_info(exports), I > 't_', I < 't`'].
 
 wait_site_joined(WaitOnSites, Cluster, Site) ->
   lists:foreach(
@@ -669,3 +842,29 @@ setup_hooks(Site) ->
         classy_node:maybe_init_the_site(Site)
     end,
     0).
+
+diagnostic(_Site, #{sites := Sites}) ->
+  maps:map(
+    fun(Site, #{running := R}) ->
+        case R of
+          true ->
+            catch classy_test_site:call(
+                    Site,
+                    fun() ->
+                        #{ members => catch ets:tab2list(classy_membership)
+                         , node => catch ets:tab2list(classy_node)
+                         }
+                    end);
+          false ->
+            stopped
+        end
+    end,
+    Sites).
+
+-spec proper_printout(string(), list()) -> _.
+proper_printout(Char, []) when Char =:= ".";
+                               Char =:= "x";
+                               Char =:= "!" ->
+  ct:print("~s", [[Char]]);
+proper_printout(Fmt, Args) ->
+  ct:pal(Fmt, Args).

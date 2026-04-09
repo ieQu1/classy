@@ -93,10 +93,17 @@ init(#top{}) ->
                , restart  => permanent
                , type     => worker
                },
+  Autocluster = #{ id       => autocluster
+                 , start    => {classy_autocluster_sup, start_link, []}
+                 , shutdown => infinity
+                 , restart  => permanent
+                 , type     => supervisor
+                 },
   Children = [ sup_spec(#{id => ?TABLE_SUP, start => {?MODULE, start_link_table_sup, []}})
              , sup_spec(#{id => ?MEMBERSHIP_SUP, start => {?MODULE, start_link_membership_sup, []}})
              , Node
              , Autoclean
+             , Autocluster
              ],
   SupFlags = #{ strategy      => rest_for_one
               , intensity     => 10
@@ -109,7 +116,7 @@ init(#table_sup{}) ->
               , start    => {classy_table, start_link, []}
               , shutdown => infinity
               , type     => worker
-              , restart  => permanent
+              , restart  => transient
               },
   SupFlags = #{ strategy      => simple_one_for_one
               , intensity     => 10

@@ -11,7 +11,9 @@
 -module(classy).
 
 %% API:
--export([ join_node/2
+-export([ info/0
+        , clusters/1
+        , join_node/2
         , kick_site/2
         , kick_node/2
         , sites/0
@@ -30,11 +32,17 @@
         , pre_kick/2
         , post_kick/2
         , pre_autoclean/2
+        , pre_autocluster/2
         , run_level/2
+        , enrich_site_info/2
         ]).
 
 -export_type([ cluster_id/0
              , site/0
+
+             , peer_info/0
+             , info/0
+             , cluster_info/0
 
              , run_level/0
              , site_status_hook/0
@@ -52,15 +60,39 @@
 
 -type site() :: binary().
 
+-type peer_info() ::
+        #{ node        := node() | undefined
+         , up          := boolean()
+         , last_update := classy_lib:unix_time_s()
+         }.
+
+-type info() ::
+        #{ cluster := cluster_id() | undefined
+         , site    := site() | undefined
+         , peers   := #{site() => peer_info()}
+         , atom()  => _
+         }.
+
+%% Mapping from cluster ID to cluster partitions.
+%% Values in the map are lists, where each element is a distinct view of the cluster.
+%%
+%% In a fully consistent cluster, this list should contain only one element.
+-type cluster_info() ::
+        #{ clusters  := #{cluster_id() => [[{site(), node()}]]}
+         , bad_nodes := [node()]
+         }.
+
 -type site_status_hook() :: fun((cluster_id(), _Local :: site(), _Up :: boolean()) -> _).
 
 -type membership_change_hook() :: fun((cluster_id(), _Local :: site(), _Remote :: site(), _IsMember :: boolean()) -> _).
 
 -type join_intent() :: join
+                     | autocluster
                      | _.
 
--type kick_intent() :: join   %% Intent set by system when site leaves the cluster to join another one
-                     | kicked %% Intent set by system when site is kicked by a third party
+-type kick_intent() :: join       %% Intent set by system when site leaves the cluster to join another one
+                     | kicked     %% Intent set by system when site is kicked by a third party
+                     | autoclean  %% Intent set by the system when the site is kicked by autoclean
                      | _.
 
 -type run_level() :: stopped | single | cluster.
@@ -69,13 +101,69 @@
 %% API functions
 %%================================================================================
 
+%% @doc Provide general information about the local node.
+-spec info() -> info().
+info() ->
+  %% Note: this is an RPC target.
+  case classy_node:the_cluster() of
+    {ok, MaybeCluster} -> ok;
+    _                  -> MaybeCluster = undefined
+  end,
+  case classy_node:the_site() of
+    {ok, MaybeSite} -> ok;
+    _               -> MaybeSite = undefined
+  end,
+  Acc = #{ cluster => MaybeCluster
+         , site    => MaybeSite
+         , peers   => classy_node:peer_info()
+         },
+  classy_hook:fold(?on_enrich_site_info, [], Acc).
+
+%% @doc Gather cluster views from a given set of nodes
+%% and aggregate this information to derive partitions.
+-spec clusters([node()]) -> cluster_info().
+clusters(Nodes) ->
+  SiteInfos = erpc:multicall(
+                Nodes,
+                classy_node, cluster_info, [],
+                classy_lib:rpc_timeout()),
+  {Clusters, BadNodes} =
+    lists:foldl(
+      fun({_Node, {ok, {ok, Cluster, Peers0}}}, {AccClusters0, AccBadNodes}) ->
+          Peers = lists:sort(Peers0),
+          AccClusters = maps:update_with(
+                          Cluster,
+                          fun(P0) ->
+                              lists:usort([Peers | P0])
+                          end,
+                          [Peers],
+                          AccClusters0),
+          {AccClusters, AccBadNodes};
+         ({Node, _}, {AccClusters, AccBadNodes}) ->
+          {AccClusters, [Node | AccBadNodes]}
+      end,
+      {#{}, []},
+      lists:zip(Nodes, SiteInfos)),
+  #{ clusters  => Clusters
+   , bad_nodes => BadNodes
+   }.
+
 %%--------------------------------------------------------------------------------
 %% Cluster management
 %%--------------------------------------------------------------------------------
 
+%% @doc Join the local site to the cluster of a remote node.
+%%
+%% This function allows a node to join a cluster by connecting to a known peer.
+%%
+%% @param Node The node to join to
+%% @param Intent The intent of the join operation.
+%% Intent is an arbitrary term passed to `pre_join' callback.
+%% The callback is free to interpret it according to the business
+%% logic requirements.
 -spec join_node(node(), join_intent()) -> ok | {error, _}.
 join_node(Node, Intent) ->
-  classy_node:join_node(Node, Intent).
+  classy_node:join_node(Node, Intent, any).
 
 -spec kick_site(site(), kick_intent()) -> ok | {error, _}.
 kick_site(Site, Intent) ->
@@ -191,10 +279,11 @@ pre_join(Hook, Prio) ->
 %% @doc Register a hook that is executed after a local site joins a
 %% cluster.
 -spec post_join(
-        fun((cluster_id(), Local) -> _),
+        fun((cluster_id(), Local, JoinedTo) -> _),
         classy_hook:prio()
        ) -> classy_hook:hook()
-  when Local :: site().
+  when Local :: site(),
+       JoinedTo :: node().
 post_join(Hook, Prio) ->
   classy_hook:insert(?on_post_join, Hook, Prio).
 
@@ -215,10 +304,11 @@ pre_kick(Hook, Prio) ->
 %% cluster. This hook can perform destructive actions associated with
 %% cleanup.
 -spec post_kick(
-        fun((cluster_id(), Local, kick_intent()) -> _),
+        fun((OldCluster, Local, kick_intent()) -> _),
         classy_hook:prio()
        ) -> classy_hook:hook()
-  when Local :: site().
+  when OldCluster :: cluster_id(),
+       Local :: site().
 post_kick(Hook, Prio) ->
   classy_hook:insert(?on_post_kick, Hook, Prio).
 
@@ -234,6 +324,27 @@ post_kick(Hook, Prio) ->
 pre_autoclean(Hook, Prio) ->
   classy_hook:insert(?on_pre_autoclean, Hook, Prio).
 
+%% @doc Register a hook that runs before autocluster.
+%% This hook allows the business code to pick the most appropriate cluster for automatic join.
+%%
+%% Return value:
+%%
+%% <itemize>
+%% <li>`{ok, {Cluster, [node()]}}': stop the search and join one of the returned nodes</li>
+%% <li>`{ok, undefined}': stop the search and do not join any node (abort autocluster until next retry)</li>
+%% <li>`undefined': continue the search</li>
+%% </itemize>
+%%
+%% WARNING: this hook cannot have side effects.
+-spec pre_autocluster(
+        fun((Candidates, cluster_info()) -> {ok, Discovered} | {ok, undefined} | undefined),
+        classy_hook:prio()
+       ) -> classy_hook:hook()
+  when Candidates :: [node()],
+       Discovered :: {cluster_id(), [node()]}.
+pre_autocluster(Hook, Prio) ->
+  classy_hook:insert(?on_pre_autocluster, Hook, Prio).
+
 %% @doc Register a hook that is executed on change of the run level of
 %% the local site.
 -spec run_level(
@@ -242,6 +353,15 @@ pre_autoclean(Hook, Prio) ->
        ) -> classy_hook:hook().
 run_level(Hook, Prio) ->
   classy_hook:insert(?on_change_run_level, Hook, Prio).
+
+%% @doc Register a hook that is executed on change of the run level of
+%% the local site.
+-spec enrich_site_info(
+        fun((info()) -> info()),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
+enrich_site_info(Hook, Prio) ->
+  classy_hook:insert(?on_enrich_site_info, Hook, Prio).
 
 %%================================================================================
 %% Internal exports

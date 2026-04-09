@@ -28,6 +28,7 @@
 -export([ start_link_site_sup/2
         , start_link_cleanup/2
         , cluster_cleanup_entrypoint/3
+        , exit_success/1
         ]).
 
 -export_type([conf/0]).
@@ -43,6 +44,8 @@
         #{ peer => map()
          , fixtures => [classy_test_fixture:t()]
          }.
+
+-define(pt_success, classy_test_cluster_success).
 
 %%================================================================================
 %% API functions
@@ -70,7 +73,8 @@ ensure_site(Site, Conf) ->
 %% @doc Stop the cluster.
 -spec stop(_Reason) -> ok.
 stop(Reason) ->
-  classy_lib:sync_stop_proc(?top, Reason, infinity).
+  persistent_term:put(?pt_success, classy_lib:is_normal_exit(Reason)),
+  classy_lib:sync_stop_proc(?top, shutdown, infinity).
 
 %% @doc Merge cluster configuration.
 -spec merge_conf(conf(), conf()) -> conf().
@@ -89,6 +93,10 @@ merge_conf(C1, C2) ->
 %%================================================================================
 
 %% @private
+exit_success(Reason) ->
+  classy_lib:is_normal_exit(Reason) andalso persistent_term:get(?pt_success, true).
+
+%% @private
 start_link_site_sup(Conf, FixtureState) ->
   supervisor:start_link({local, ?sites}, ?MODULE, {sites, Conf, FixtureState}).
 
@@ -102,9 +110,11 @@ cluster_cleanup_entrypoint(Parent, Fixtures, FixtureState) ->
   proc_lib:init_ack(Parent, {ok, self()}),
   receive
     {'EXIT', _, Reason} ->
+      Success = exit_success(Reason),
+      persistent_term:erase(?pt_success),
       classy_test_fixture:cleanup_per_cluster(
         Fixtures,
-        classy_lib:is_normal_exit(Reason),
+        Success,
         FixtureState),
       exit(shutdown)
   end.

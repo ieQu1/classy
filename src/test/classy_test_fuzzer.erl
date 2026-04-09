@@ -12,6 +12,9 @@
         , is_running/2
         , running_sites/1
         , sites_of_cluster/2
+        , trace_and_run/1
+        , wrap_commands/1
+        , real_cluster_of/1
         ]).
 
 %% behavior callbacks:
@@ -25,8 +28,9 @@
 %% internal exports:
 -export([ init_cluster/1
         , setup_hooks/1
-        , join_node/3
-        , kick_site/3
+        , join_node/4
+        , kick_site/4
+        , start_site/1
         ]).
 
 -export_type([test_conf/0]).
@@ -64,17 +68,21 @@
            cluster := classy:cluster_id() | undefined
          , running := boolean()
          , conf := classy_test_site:conf()
+         , in_sync := boolean()
          }.
 
 -type s() ::
         #{ module := module()
-         , sites := site_state()
+         , sites := #{classy:site() => site_state()}
          , quorum := pos_integer()
          , n_sites := pos_integer()
            %% Symbolic ID of the cluster (it's not equal to the actual cluster ID, which is random)
          , cluster_id := pos_integer()
          , _ => _
          }.
+
+-define(rpc_timeout, 5_000).
+-define(sync_timeout, ?rpc_timeout * 5).
 
 %%================================================================================
 %% Internal exports
@@ -90,7 +98,7 @@ init_cluster(#{sites := Sites, quorum := Quorum, n_sites := NSites}) ->
                           , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
                                     , quorum => Quorum
                                     , n_sites => NSites
-                                    , sync_timeout => 10
+                                    , sync_timeout => 1000
                                     }
                           }},
         Conf = Conf0#{fixtures => [ClassyFixture] ++ Fixtures},
@@ -107,72 +115,99 @@ setup_hooks(Site) ->
     end,
     0).
 
-join_node(Origin, Target, Intent) ->
+join_node(Origin, Target, Intent, S) ->
   TargetNode = classy_test_site:which_node(Target),
-  ?tp(classy_test_fuzzer_join_node,
-      #{ site => Origin
-       , target => Target
+  ?tp(info, classy_test_fuzzer_join_node,
+      #{ site        => Origin
+       , target      => Target
        , target_node => TargetNode
-       , intent => Intent
+       , cluster     => real_cluster_of(Target)
+       , intent      => Intent
        }),
-  do_join_node(Origin, TargetNode, Intent, 1).
-
-do_join_node(Origin, TargetNode, Intent, Retry) ->
-  Result = classy_test_site:call(
-             Origin,
-             fun() ->
-                 classy:join_node(TargetNode, Intent)
-             end,
-             10_000),
-  case Result of
-    ok ->
-      ok;
-    {error, not_in_cluster} when Retry =< 10 ->
-      %% Note: we use retries since there's a temporary state
-      %% immediately after kick, when node left the old cluster, but
-      %% hasn't joined its own "singleton" cluster yet.
-      timer:sleep(Retry * 10),
-      do_join_node(Origin, TargetNode, Intent, Retry + 1);
-    Other ->
-      Other
+  TargetCluster = cluster_of(Target, S),
+  OriginCluster = cluster_of(Origin, S),
+  case OriginCluster of
+    TargetCluster ->
+      %% If already in the same cluster, no join event expected
+      Result = classy_test_site:call(
+                 Origin,
+                 fun() ->
+                     classy:join_node(TargetNode, Intent)
+                 end,
+                 ?rpc_timeout),
+      {Result, {ok, []}};
+    _ ->
+      exec_and_wait_sync(
+        [Origin | sites_of_cluster(TargetCluster, S)],
+        fun() ->
+            ?retry(100, 10,
+                   ok = classy_test_site:call(
+                          Origin,
+                          fun() ->
+                              classy:join_node(TargetNode, Intent)
+                          end,
+                          ?rpc_timeout))
+        end,
+        ?match_event(#{?snk_kind := classy_member_join, remote := Origin}),
+        S)
   end.
 
-kick_site(Origin, Target, Intent) ->
-  ?tp(classy_test_fuzzer_join_node,
+kick_site(Origin, Target, Intent, S) ->
+  ?tp(info, classy_test_fuzzer_kick_site,
       #{ site => Origin
        , target => Target
        , intent => Intent
        }),
-  {Ret, _} =
-    ?wait_async_action(
-       classy_test_site:call(
-         Origin,
-         fun() ->
-             classy:kick_site(Target, Intent)
-         end,
-         10_000),
-       #{ ?snk_kind := classy_member_leave
-        , remote    := Target
-        , local     := Origin
-        },
-       5_000),
-  Ret.
+  exec_and_wait_sync(
+    sites_of_cluster(cluster_of(Origin, S), S),
+    fun() ->
+        classy_test_site:call(
+          Origin,
+          fun() ->
+              classy:kick_site(Target, Intent)
+          end,
+          ?rpc_timeout)
+    end,
+    ?match_event(#{?snk_kind := classy_member_leave, remote := Target}),
+    S).
+
+start_site(Site) ->
+  ?wait_async_action(
+     classy_test_site:start(Site),
+     #{ ?snk_kind := classy_change_run_level
+      , to        := single
+      , ?snk_meta := #{local := Site}
+      },
+     ?sync_timeout).
 
 %%================================================================================
 %% Utility functions
 %%================================================================================
 
+%% @doc Wrap every command in `trace_and_run' call:
+wrap_commands(Cmds) ->
+  [case I of
+     {set, Var, {call, M, F, A}} ->
+       {set, Var, {call, ?MODULE, trace_and_run, [{M, F, A}]}};
+     _ ->
+       I
+   end || I <- Cmds].
+
+trace_and_run(MFA = {M, F, A}) ->
+  ?tp_span(info, classy_test_fuzzer_exec, #{mfa => MFA},
+           apply(M, F, A)).
+
 format_cmds(Cmds) ->
   lists:map(
     fun({init, {init, Cfg}}) ->
-        io_lib:format(" *** Test configuration: ~p~n", [Cfg]);
+        io_lib:format("   %%% Test configuration: ~0p~n", [Cfg]);
        ({call, ?MODULE, init_cluster, [MS]}) ->
-        io_lib:format(" *** init(~p)~n", [MS]);
+        io_lib:format("   %%% init(~0p)~n", [MS]);
        ({set, _, {call, M, F, Args}}) ->
-        ArgsStr = [io_lib:format("~p", [Arg]) || Arg <- Args],
-        io_lib:format(" *** ~p:~p(~s)~n", [M, F, lists:join(", ", ArgsStr)]);
+        ArgsStr = [io_lib:format("~0p", [Arg]) || Arg <- Args],
+        io_lib:format("   ~p:~p(~s),~n", [M, F, lists:join(", ", ArgsStr)]);
        (Other) ->
-        io_lib:format(" *** other(~p)~n", [Other])
+        io_lib:format(" %%% other(~0p)~n", [Other])
     end,
     Cmds).
 
@@ -208,6 +243,19 @@ sites_of_cluster(Cluster, #{sites := Sites}) ->
     [],
     Sites).
 
+real_cluster_of(Site) ->
+  ?retry(
+     100,
+     100,
+     begin
+       #{cluster := Cluster} =
+         classy_test_site:call(
+           Site,
+           classy_node, hello, [],
+           ?rpc_timeout),
+       Cluster
+     end).
+
 %%================================================================================
 %% Proper generators
 %%================================================================================
@@ -227,17 +275,18 @@ enrich_test_conf_(Conf = #{module := _, sites := Sites}) ->
 running_site_command_(Site, S = #{sites := Sites}) ->
   #{Site := #{cluster := Cluster}} = Sites,
   OtherMembers = sites_of_cluster(Cluster, S) -- [Site],
+  OtherRunning = running_sites(S),% -- [Site],
   frequency(
-    [ {10, {call, ?MODULE, kick_site, [Site, oneof(OtherMembers), kick]}} || length(OtherMembers) > 0] ++
-    [ {10, {call, classy_test_site, stop, [Site]}}
-    , {10, {call, ?MODULE, join_node, [Site, oneof(running_sites(S)), join]}}
+    [ {7, {call, ?MODULE, kick_site, [Site, oneof(OtherMembers), kick, S]}} || length(OtherMembers) > 0] ++
+    [ {10, {call, ?MODULE, join_node, [Site, oneof(OtherRunning), join, S]}} || length(OtherRunning) > 0] ++
+    [ {5, {call, classy_test_site, stop, [Site]}}
     | optcall(S, running_site_command, [Site, S], [])
     ]).
 
 stopped_site_command_(Site, S) ->
   frequency(
-    [ {10, {call, classy_test_site, start, [Site]}}
-    | optcall(S, running_site_command, [Site, S], [])
+    [ {10, {call, ?MODULE, start_site, [Site]}}
+    | optcall(S, stopped_site_command, [Site, S], [])
     ]).
 
 site_command_(Site, S) ->
@@ -264,6 +313,8 @@ initial_state(Conf) ->
   {init, Conf}.
 
 %% Initial connection:
+next_state(S, Ret, {call, ?MODULE, trace_and_run, [{M, F, A}]}) ->
+  next_state(S, Ret, {call, M, F, A});
 next_state(_, _Ret, {call, ?MODULE, init_cluster, [TestConf]}) ->
   #{sites := Sites0} = TestConf,
   {Sites, NextClusterId} =
@@ -273,6 +324,7 @@ next_state(_, _Ret, {call, ?MODULE, init_cluster, [TestConf]}) ->
                  , #{ cluster => Acc
                     , running => false
                     , conf    => Conf
+                    , in_sync => true
                     }
                  },
           {Elem, Acc + 1}
@@ -282,7 +334,7 @@ next_state(_, _Ret, {call, ?MODULE, init_cluster, [TestConf]}) ->
   TestConf#{ sites      := maps:from_list(Sites)
            , cluster_id => NextClusterId
            };
-next_state(S, _Ret, {call, classy_test_site, start, [Site]}) ->
+next_state(S, _Ret, {call, ?MODULE, start_site, [Site]}) ->
   update_site(
     Site,
     fun(SiteS) -> SiteS#{running := true} end,
@@ -292,31 +344,109 @@ next_state(S, _Ret, {call, classy_test_site, stop, [Site]}) ->
     Site,
     fun(SiteS) -> SiteS#{running := false} end,
     S);
-next_state(S = #{sites := Sites}, _Ret, {call, ?MODULE, join_node, [Origin, Target, _Intent]}) ->
+next_state(S = #{sites := Sites}, _Ret, {call, ?MODULE, join_node, [Origin, Target | _]}) ->
   #{Target := #{cluster := Cluster}} = Sites,
   update_site(
     Origin,
-    fun(SiteS) -> SiteS#{cluster := Cluster} end,
+    fun(SiteS) ->
+        %% Joining to a live node syncs the origin:
+        SiteS#{cluster := Cluster, in_sync := true}
+    end,
     S);
-next_state(S, _Ret, {call, ?MODULE, kick_site, [_Origin, Target, _Intent]}) ->
+next_state(S, _Ret, {call, ?MODULE, kick_site, [_Origin, Target | _]}) ->
   #{cluster_id := NextClusterId} = S,
   update_site(
     Target,
-    fun(SiteS) -> SiteS#{cluster := NextClusterId} end,
+    fun(SiteS = #{running := Running}) ->
+        %% If site is kicked while stopped, we mark it as out-of-sync:
+        SiteS#{cluster := NextClusterId, in_sync := Running}
+    end,
     S#{cluster_id := NextClusterId + 1});
 next_state(S = #{module := Mod}, Ret, Command) ->
   Mod:next_state(S, Ret, Command).
 
-precondition(_, _) ->
-    true.
+precondition(S, {call, ?MODULE, trace_and_run, [{M, F, A}]}) ->
+  precondition(S, {call, M, F, A});
+precondition({init, _}, {call, ?MODULE, init_cluster, _}) ->
+  true;
+precondition({init, _}, _) ->
+  false;
+precondition(S, {call, ?MODULE, kick_site, [Local, Target|_]}) ->
+  is_running(Local, S) andalso
+  cluster_of(Local, S) =:= cluster_of(Target, S);
+precondition(S, {call, ?MODULE, join_node, [Local, Target|_]}) ->
+  is_running(Local, S) andalso
+  is_running(Target, S) andalso
+  in_sync(Target, S) andalso
+  Local =/= Target;
+precondition(S, Call) ->
+  optcall(S, precondition, [S, Call], true).
 
+postcondition(S, {call, ?MODULE, trace_and_run, [{M, F, A}]}, Result) ->
+  postcondition(S, {call, M, F, A}, Result);
 postcondition(PrevState, Call, Result) ->
   CurrentState = next_state(PrevState, Result, Call),
+  case Call of
+    {call, ?MODULE, join_node, Args} ->
+      ?assertMatch(
+         {ok, {ok, _Events}},
+         Result,
+         #{ msg => "Join failed"
+          , args => Args
+          , model_state => CurrentState
+          });
+    {call, ?MODULE, kick_site, Args} ->
+      ?assertMatch(
+         {ok, {ok, _Event}},
+         Result,
+         #{ msg => "Kick failed"
+          , args => Args
+          , model_state => CurrentState
+          });
+    {call, ?MODULE, start_site, Args} ->
+      ?assertMatch(
+         {ok, {ok, _Event}},
+         Result,
+         #{ msg => "Start failed"
+          , args => Args
+          , model_state => CurrentState
+          });
+    _ ->
+      ok
+  end,
   optcall(CurrentState, postcondition, [CurrentState, Call, Result], true).
 
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+in_sync(Site, #{sites := Sites}) ->
+  #{Site := #{in_sync := InSync}} = Sites,
+  InSync.
+
+cluster_of(Site, #{sites := Sites}) ->
+  #{Site := #{cluster := C}} = Sites,
+  C.
+
+-spec exec_and_wait_sync([classy:site()], Action, snabbkaffe:predicate(), s()) ->
+        {Result, {ok | timeout, [snabbkaffe:event()]}}
+  when Action :: fun(() -> Result).
+exec_and_wait_sync(Sites0, Action, Filter, S) ->
+  Sites = lists:uniq([I || I <- Sites0, is_running(I, S)]),
+  NEvents = length(Sites),
+  WrappedFilter =
+    fun(Event) ->
+        case Filter(Event) of
+          true ->
+            #{?snk_meta := #{local := Local}} = Event,
+            lists:member(Local, Sites);
+          false ->
+            false
+        end
+    end,
+  {ok, Sub} = snabbkaffe:subscribe(WrappedFilter, NEvents, ?sync_timeout),
+  Result = Action(),
+  {Result, snabbkaffe:receive_events(Sub)}.
 
 maybe_generate(Key, Conf, Generator) ->
   case Conf of

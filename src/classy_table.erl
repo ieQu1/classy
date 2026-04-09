@@ -39,7 +39,7 @@
 %% internal exports:
 -export([start_link/2]).
 
--export_type([tab/0, rec/0, options/0]).
+-export_type([tab/0, rec/0, options/0, on_update_callback/0]).
 
 -include("classy_internal.hrl").
 -include_lib("snabbkaffe/include/trace.hrl").
@@ -53,9 +53,12 @@
 
 -type tab() :: atom().
 
+-type on_update_callback() :: fun((tab(), open | {w, _Key, _Val} | {d, _Key} | close) -> _).
+
 -type options() ::
         #{ ets_options => list()
          , badness_threshold => pos_integer()
+         , on_update => on_update_callback()
          }.
 
 -type rec() :: #classy_kv{ k :: term()
@@ -75,6 +78,8 @@
 -define(d(K), {d, K}).
 -define(clear, clear).
 
+-define(call_timeout, infinity).
+
 %%================================================================================
 %% API functions
 %%================================================================================
@@ -87,9 +92,9 @@
 open(Tab, Options) when is_atom(Tab), is_map(Options) ->
   case classy_sup:start_table(Tab, Options) of
     {ok, Pid} ->
-      gen_server:call(Pid, #call_ensure_open{tab = Tab}, infinity);
+      gen_server:call(Pid, #call_ensure_open{tab = Tab}, ?call_timeout);
     {error, {already_started, Pid}} ->
-      gen_server:call(Pid, #call_ensure_open{tab = Tab}, infinity);
+      gen_server:call(Pid, #call_ensure_open{tab = Tab}, ?call_timeout);
     Err = {error, _} ->
       Err
   end.
@@ -115,39 +120,60 @@ stop(Tab, Timeout) ->
 %% No writes to disk are made until `flush' is called explicitly or implicitly.
 -spec dirty_write(tab(), _Key, _Val) -> ok.
 dirty_write(Tab, Key, Val) ->
-  gen_server:call(?via(Tab), #call_write{k = Key, v = Val, wal = false}).
+  gen_server:call(
+    ?via(Tab),
+    #call_write{k = Key, v = Val, wal = false},
+    ?call_timeout).
 
 %% @doc Write operation to WAL, sync WAL and then update RAM representation of the record.
 %%
 %% Note: this is a heavy operation.
 -spec write(tab(), _Key, _Val) -> ok.
 write(Tab, Key, Val) ->
-  gen_server:call(?via(Tab), #call_write{k = Key, v = Val, wal = true}).
+  gen_server:call(
+    ?via(Tab),
+    #call_write{k = Key, v = Val, wal = true},
+    ?call_timeout).
 
 %% @doc Mark record as deleted and dirty.
 -spec dirty_delete(tab(), _Key) -> ok.
 dirty_delete(Tab, Key) ->
-  gen_server:call(?via(Tab), #call_delete{k = Key, wal = false}).
+  gen_server:call(
+    ?via(Tab),
+    #call_delete{k = Key, wal = false},
+    ?call_timeout).
 
 %% @doc Write to the WAL that the record has been deleted and update the RAM representation.
 -spec delete(tab(), _Key) -> ok.
 delete(Tab, Key) ->
-  gen_server:call(?via(Tab), #call_delete{k = Key, wal = true}).
+  gen_server:call(
+    ?via(Tab),
+    #call_delete{k = Key, wal = true},
+    ?call_timeout).
 
 %% @doc Persist all records that got dirtied prior to this call to WAL.
 -spec flush(tab()) -> ok.
 flush(Tab) ->
-  gen_server:call(?via(Tab), #call_flush{}, infinity).
+  gen_server:call(
+    ?via(Tab),
+    #call_flush{},
+    ?call_timeout).
 
 %% @doc Make a checkpoint and trunkate the WAL.
 -spec force_compaction(tab()) -> ok.
 force_compaction(Tab) ->
-  gen_server:call(?via(Tab), #call_force_compaction{}, infinity).
+  gen_server:call(
+    ?via(Tab),
+    #call_force_compaction{},
+    ?call_timeout).
 
 %% @doc Drop the table (it must be open)
 -spec drop(tab()) -> ok.
 drop(Tab) ->
-  gen_server:call(?via(Tab), #call_drop{}, infinity).
+  gen_server:call(
+    ?via(Tab),
+    #call_drop{},
+    ?call_timeout).
 
 %% @doc Lookup a value from the table.
 -spec lookup(tab(), _Key) -> [_Val].
@@ -157,7 +183,10 @@ lookup(Tab, Key) ->
 %% @doc Delete all data in the table.
 -spec clear(tab()) -> ok.
 clear(Tab) ->
-  gen_server:call(?via(Tab), #call_clear{}, infinity).
+  gen_server:call(
+    ?via(Tab),
+    #call_clear{},
+    ?call_timeout).
 
 %%================================================================================
 %% Internal exports
@@ -180,6 +209,7 @@ start_link(Tab, Options) ->
         , log :: _
         , log_size = 0 :: non_neg_integer()
         , badness_threshold :: pos_integer()
+        , on_update :: on_update_callback() | undefined
         }).
 
 -type s() :: #s{}.
@@ -194,12 +224,24 @@ init([TabName, Options]) ->
         , dirty = #{}
         , dir = application:get_env(classy, table_dir, ".")
         , badness_threshold = BadnessThreshold
+        , on_update = maps:get(on_update, Options, undefined)
         },
+  exec_on_update(open, S),
   {ok, S, {continue, restore}}.
 
 %% @private
-handle_continue(restore, S) ->
-  {noreply, restore(S)}.
+handle_continue(restore, S0 = #s{name = Name}) ->
+  T0 = os:system_time(microsecond),
+  S = restore(S0),
+  Elapsed = (os:system_time(microsecond) - T0) / 1.0e6,
+  LogLevel = if Elapsed > 0.1 -> warning;
+                true          -> debug
+             end,
+  ?tp(LogLevel, classy_table_restore_time,
+      #{ table => Name
+       , time  => Elapsed
+       }),
+  {noreply, S}.
 
 %% @private
 handle_call(#call_ensure_open{}, _From, S) ->
@@ -219,7 +261,7 @@ handle_call(#call_force_compaction{}, From, S0) ->
       {stop, compaction_failed, S}
   end;
 handle_call(#call_clear{}, From, S0) ->
-  S = do_clear(S0),
+  S = handle_clear(S0),
   maybe_compact(From, ok, handle_flush(S));
 handle_call(#call_drop{}, From, S) ->
   {stop, normal, handle_drop(From, S)};
@@ -253,11 +295,19 @@ handle_info(Info, S) ->
   {noreply, S}.
 
 %% @private
-terminate(_, undefined) ->
-  ok;
-terminate(_Reason, S = #s{}) ->
-  handle_flush(S),
-  ok.
+terminate(Reason, S) ->
+  classy_lib:is_normal_exit(Reason) orelse
+    ?tp(warning, ?classy_abnormal_exit,
+        #{ server => ?MODULE
+         , reason => Reason
+         }),
+  case S of
+    undefined ->
+      ok;
+    #s{} ->
+      handle_flush(S),
+      exec_on_update(close, S)
+  end.
 
 %%================================================================================
 %% Internal functions
@@ -276,6 +326,7 @@ restore(S = #s{ets = ETS}) ->
       %% Normal case:
       {ok, Log} = open_log(RegularName, read_write),
       {ok, LogSize} = do_restore(Log, start, ETS, 0),
+      exec_on_update_open(S),
       S#s{ log = Log
          , log_size = LogSize
          };
@@ -302,7 +353,7 @@ do_restore(Log, Cont0, ETS, N) ->
            (?clear) ->
             ets:match_delete(ETS, '_')
         end,
-        Chunk),
+       Chunk),
       do_restore(Log, Cont, ETS, N + length(Chunk));
     eof ->
       {ok, N}
@@ -319,11 +370,13 @@ handle_write(
  ) ->
   ok = write_log(Log, [?w(K, V)]),
   ets:insert(ETS, #classy_kv{k = K, v = V}),
+  exec_on_update({w, K, V}, S),
   S#s{ dirty = maps:remove(K, D)
      , log_size = LogSize + 1
      };
 handle_write(#call_write{k = K, v = V, wal = false}, S = #s{ets = ETS, dirty = D}) ->
   ets:insert(ETS, #classy_kv{k = K, v = V}),
+  exec_on_update({w, K, V}, S),
   S#s{ dirty = D#{K => true}
      }.
 
@@ -333,11 +386,13 @@ handle_delete(
  ) ->
   ok = write_log(Log, [?d(K)]),
   ets:delete(ETS, K),
+  exec_on_update({d, K}, S),
   S#s{ dirty = maps:remove(K, D)
      , log_size = LogSize + 1
      };
 handle_delete(#call_delete{k = K, wal = false}, S = #s{ets = ETS, dirty = D}) ->
   ets:delete(ETS, K),
+  exec_on_update({d, K}, S),
   S#s{dirty = D#{K => true}}.
 
 handle_flush(S = #s{log = Log, dirty = Dirty}) when Log =:= undefined;
@@ -361,6 +416,46 @@ handle_flush(S = #s{ets = ETS, log = Log, dirty = Dirty, log_size = LogSize0}) -
   S#s{ dirty = #{}
      , log_size = LogSize
      }.
+
+-spec exec_on_update_open(#s{}) -> ok.
+exec_on_update_open(#s{on_update = undefined}) ->
+  ok;
+exec_on_update_open(S = #s{ets = ETS}) ->
+  ets:foldl(
+    fun(#classy_kv{k = K, v = V}, Acc) ->
+        exec_on_update({w, K, V}, S),
+        Acc
+    end,
+    undefined,
+    ETS),
+  ok.
+
+-spec exec_on_update_clear(#s{}) -> ok.
+exec_on_update_clear(#s{on_update = undefined}) ->
+  ok;
+exec_on_update_clear(S = #s{ets = ETS}) ->
+  ets:foldl(
+    fun(#classy_kv{k = K}, Acc) ->
+        exec_on_update({d, K}, S),
+        Acc
+    end,
+    undefined,
+    ETS),
+  ok.
+
+exec_on_update(_, #s{on_update = undefined}) ->
+  ok;
+exec_on_update(Op, #s{on_update = Fun, name = Name}) ->
+  try Fun(Name, Op)
+  catch
+    EC:Err:Stack ->
+      ?tp(error, classy_table_on_update_callback_failure,
+          #{ EC         => Err
+           , stacktrace => Stack
+           , table      => Name
+           , callback   => Fun
+           })
+  end.
 
 -spec do_compaction(s()) -> {ok, s()} | {error, _Reason, s()}.
 do_compaction(S0 = #s{name = Name, ets = Ets}) ->
@@ -402,12 +497,15 @@ dump_ets(Log, N, {Batch, Cont}) ->
     N + length(Recs),
     ets:match(Cont)).
 
-do_clear(S = #s{ets = Ets, log = Log, log_size = LogSize}) ->
+handle_clear(S = #s{ets = Ets, log = Log, log_size = LogSize}) ->
   ok = write_log(Log, [?clear]),
+  exec_on_update_clear(S),
   ets:match_delete(Ets, '_'),
   S#s{dirty = #{}, log_size = LogSize + 1}.
 
 handle_drop(From, S = #s{ets = Ets, log = Log}) ->
+  exec_on_update_clear(S),
+  exec_on_update(close, S),
   ets:delete(Ets),
   close_log(Log),
   file:delete(log_name(S, ".NEW")),

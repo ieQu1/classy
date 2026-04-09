@@ -1,0 +1,80 @@
+%%--------------------------------------------------------------------
+%% Copyright (c) 2019-2026 EMQ Technologies Co., Ltd. All Rights Reserved.
+%%
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
+%%--------------------------------------------------------------------
+
+-module(classy_autocluster_sup).
+
+-behaviour(supervisor).
+
+-export([start_link/0]).
+
+%% API
+-export([start_child/2, stop_child/1]).
+
+%% Supervisor callbacks
+-export([init/1]).
+
+%%--------------------------------------------------------------------
+%% API functions
+%%--------------------------------------------------------------------
+
+-spec start_link() -> {ok, pid()} | ignore | {error, term()}.
+start_link() ->
+  supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+
+start_child(M, Args) ->
+  supervisor:start_child(?MODULE, child_spec(M, Args)).
+
+child_spec(M, Args) ->
+  {M, {M, start_link, Args}, permanent, 5000, worker, [M]}.
+
+stop_child(M) ->
+  case supervisor:terminate_child(?MODULE, M) of
+    ok -> supervisor:delete_child(?MODULE, M);
+    {error, not_found} -> ok;
+    Error -> Error
+  end.
+
+%%--------------------------------------------------------------------
+%% Supervisor callbacks
+%%--------------------------------------------------------------------
+
+init([]) ->
+  Autocluster =
+    #{ id       => autocluster
+     , start    => {classy_autocluster, start_link, []}
+     , shutdown => 10_000
+     , restart  => permanent
+     , type     => worker
+     },
+  ETCD = case classy_lib:discovery_strategy() of
+           {etcd, Options} ->
+             case proplists:get_value(version, Options, v3) of
+               v3 ->
+                 [#{id       => classy_discovery_etcd,
+                    start    => {classy_discovery_etcd, start_link, [Options]},
+                    restart  => permanent,
+                    shutdown => 5000,
+                    type     => worker,
+                    modules  => [classy_discovery_etcd]
+                   }];
+               _ ->
+                 []
+             end;
+           _Other ->
+             []
+         end,
+  Children = [Autocluster | ETCD],
+  {ok, {{rest_for_one, 10, 100}, Children}}.

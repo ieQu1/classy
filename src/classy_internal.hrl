@@ -31,6 +31,8 @@
 -define(on_post_kick, on_post_leave).
 -define(on_change_run_level, on_change_run_level).
 -define(on_pre_autoclean, on_pre_autoclean).
+-define(on_pre_autocluster, on_pre_autocluster).
+-define(on_enrich_site_info, on_enrich_site_info).
 
 %% Run levels:
 -define(stopped, stopped).

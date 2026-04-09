@@ -237,7 +237,7 @@ terminate(Reason, S0 = #s{site = Site, spec = Spec, fixture_state = FS}) ->
          , reason => Reason
          }),
   _ = do_stop(S0),
-  Success = classy_lib:is_normal_exit(Reason),
+  Success = classy_test_cluster:exit_success(Reason),
   #{fixtures := Fixtures} = Spec,
   classy_test_fixture:cleanup_per_site(Fixtures, Site, Success, FS),
   ?tp(classy_test_site_destroyed, #{site => Site});
