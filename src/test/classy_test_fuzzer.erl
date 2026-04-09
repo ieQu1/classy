@@ -429,8 +429,8 @@ cluster_of(Site, #{sites := Sites}) ->
   C.
 
 -spec exec_and_wait_sync([classy:site()], Action, snabbkaffe:predicate(), s()) ->
-        {Result, [snabbkaffe:event()]} when
-    Action :: fun(() -> Result).
+        {Result, {ok | timeout, [snabbkaffe:event()]}}
+  when Action :: fun(() -> Result).
 exec_and_wait_sync(Sites0, Action, Filter, S) ->
   Sites = lists:uniq([I || I <- Sites0, is_running(I, S)]),
   NEvents = length(Sites),
