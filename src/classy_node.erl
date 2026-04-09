@@ -492,16 +492,7 @@ init_cluster() ->
     {ok, Site} ?= the_site(),
     logger:update_process_metadata(#{local => Site}),
     {ok, _} = classy_sup:ensure_membership(Cluster, Site),
-    %% Start membership processes for all known former clusters, in
-    %% order to relay information to former peers:
-    maps:foreach(
-      fun(Cluster, Peers) ->
-          case Peers -- [Site] of
-            []      -> ok;
-            [_ | _] -> classy_sup:ensure_membership(Cluster, Site)
-          end
-      end,
-      classy_membership:known_clusters(Site)),
+    start_old_clusters(Site),
     S = update_runtime(
           #s{ cluster = Cluster
             , site = Site
@@ -559,6 +550,18 @@ change_run_level(To, #s{run_level = From} = S) when To >= 0, To =< 3 ->
          end,
   classy_hook:foreach(?on_change_run_level, [run_level(From), run_level(Next)]),
   change_run_level(To, S#s{run_level = Next}).
+
+%% Start membership processes for all known former clusters, in order
+%% to relay information to former peers.
+start_old_clusters(Site) ->
+  maps:foreach(
+    fun(Cluster, Peers) ->
+        case Peers -- [Site] of
+          []      -> ok;
+          [_ | _] -> classy_sup:ensure_membership(Cluster, Site)
+        end
+    end,
+    classy_membership:known_clusters(Site)).
 
 -spec run_level(run_level_int()) -> run_level_atom();
                (run_level_atom()) -> run_level_int().

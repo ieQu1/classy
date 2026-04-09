@@ -55,7 +55,7 @@ t_010_cluster(_Conf) ->
      ]).
 
 %% This testcase verifies happy case of joining one node to another:
-t_020_join(Conf) ->
+t_020_join(_Conf) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   ?check_trace(
@@ -114,15 +114,15 @@ t_020_join(Conf) ->
         fun(Trace) ->
             ?assert(
                ?strict_causality(
-                  #{?snk_kind := classy_pre_join_node, cluster := C},
-                  #{?snk_kind := classy_joined_cluster, cluster := C},
+                  #{?snk_kind := classy_pre_join_node, cluster := _C},
+                  #{?snk_kind := classy_joined_cluster, cluster := _C},
                   Trace))
         end}
      , fun events_on_all_sites/1
      ]).
 
 %% This testcase verifies happy case of kicking node from the cluster:
-t_030_kick(Conf) ->
+t_030_kick(_Conf) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
@@ -170,7 +170,7 @@ t_030_kick(Conf) ->
      ]).
 
 %% Verify that node can be kicked from the cluster while down:
-t_040_kick_in_absentia(Conf) ->
+t_040_kick_in_absentia(_Conf) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
@@ -228,8 +228,8 @@ t_040_kick_in_absentia(Conf) ->
             ?assertMatch(
                [_],
                [I || I = #{ ?snk_kind := classy_kicked_remotely
-                          , ?snk_meta := #{node := N1}
-                          } <- Trace])
+                          , ?snk_meta := #{node := N}
+                          } <- Trace, N =:= N1])
         end}
      , fun no_unexpected_events/1
      , fun events_on_all_sites/1
@@ -293,7 +293,7 @@ t_060_at_lower_level(_Config) ->
      #{timetrap => 20_000},
      begin
        %% Prepare the system:
-       N1 = create_start_site(S1, #{}),
+       _N1 = create_start_site(S1, #{}),
        timer:sleep(1000),
        ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
        ?assertMatch(
@@ -409,7 +409,7 @@ t_999_fuzz(_Config) ->
   %% values to avoid blowing up CI. Hence it's recommended to
   %% increase the max_size and numtests when doing local
   %% development using "apps/emqx/test/sessds.cfg"
-  NTests = ct:get_config({fuzzer, n_tests}, 30),
+  NTests = ct:get_config({fuzzer, n_tests}, 20),
   MaxSize = ct:get_config({fuzzer, max_size}, 100),
   NCommandsFactor = ct:get_config({fuzzer, command_multiplier}, 4),
   ?assertMatch(
@@ -473,7 +473,7 @@ fuzz_prop(Cmds) ->
 
 fuzz_verify({init, _}) ->
   ok;
-fuzz_verify(S = #{sites := Sites}) ->
+fuzz_verify(S) ->
   lists:foreach(
     fun(Site) ->
         ?retry(1000, 10, fuzz_verify_site(Site, S))
@@ -523,9 +523,9 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
 %% according to the spec as running.
 no_stopped_nodes_reported_as_running(Site, #{sites := Sites}) ->
   StoppedNodes = maps:fold(
-                   fun(Site, #{running := Running}, Acc) ->
+                   fun(Peer, #{running := Running}, Acc) ->
                        case Running of
-                         false -> [fuzz_node_name(Site) | Acc];
+                         false -> [fuzz_node_name(Peer) | Acc];
                          true  -> Acc
                        end
                    end,

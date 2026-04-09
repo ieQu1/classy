@@ -32,7 +32,7 @@
 -export([reset_acked_out/4]).
 -endif.
 
--export_type([start_args/0, op/0, ord/0, clock/0, sync_data/0]).
+-export_type([start_args/0, op/0, ord/0, clock/0, sync_data/0, pk_last/0, pv_last/0]).
 
 -include("classy_internal.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").

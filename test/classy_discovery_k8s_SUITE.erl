@@ -42,7 +42,7 @@ t_discover(_) ->
      {ok, ['ekka@192.168.10.10']},
      classy_discovery_strategy:discover(
        classy_discovery_k8s,
-       ?OPTIONS#{app_name => "ekka"})),
+       maps:merge(?OPTIONS, #{app_name => "ekka"}))),
   %% Below test relies on rebar3 ct is run with '--name ct@127.0.0.1'
   ?assertEqual(
      {ok, ['ct@192.168.10.10']},

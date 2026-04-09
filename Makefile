@@ -40,7 +40,7 @@ coveralls:
 
 .PHONY: fuzz
 fuzz:
-	$(REBAR) ct --name ct --verbose --cover --suite classy_SUITE --case t_999_fuzz
+	$(REBAR) ct --name ct --verbose --cover --suite classy_SUITE --case t_999_fuzz --readable false
 
 ##########################################################################################
 # Concuerror
