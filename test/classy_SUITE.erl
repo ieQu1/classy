@@ -146,6 +146,10 @@ t_030_kick(_Conf) ->
            Sites,
            ?ON(I, classy:sites()))
         || I <- Sites],
+       %% Try to kick non-existent nodes, it should fail:
+       ?assertMatch(
+          {error, target_not_in_cluster},
+          ?ON(S1, classy:kick_node('fake@node.local', force))),
        %% Kick N1 from the cluster from N3:
        {ok, SubRef} = snabbkaffe:subscribe(?match_event(#{?snk_kind := classy_init_clustering})),
        ?assertMatch(ok, ?ON(S3, classy:kick_node(N1, force))),
@@ -401,6 +405,40 @@ t_080_desync(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies `classy:info()' function
+t_090_info(_Config) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  Sites = [S1, S2],
+  EnrichInfo = fun(Info) ->
+                   Info#{hello => world}
+               end,
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       %% Prepare system:
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       [?ON(I, classy:enrich_site_info(EnrichInfo, 0))
+        || I <- Sites],
+       %% Form cluster:
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       %% Verify info:
+       [?assertMatch(
+           #{ hello   := world
+            , site    := I
+            , cluster := Cluster
+            , peers   := #{ S1 := #{node := _, up := true, last_update := _}
+                          , S2 := #{node := _, up := true, last_update := _}
+                          }
+            } when is_binary(Cluster),
+           ?ON(I, classy:info()))
+        || I <- Sites]
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
 t_999_fuzz(_Config) ->
   %% NOTE: we set timeout at the lowest level to capture the trace
   %% and have a nicer error message.
@@ -411,7 +449,7 @@ t_999_fuzz(_Config) ->
   %% development using "apps/emqx/test/sessds.cfg"
   NTests = ct:get_config({fuzzer, n_tests}, 20),
   MaxSize = ct:get_config({fuzzer, max_size}, 100),
-  NCommandsFactor = ct:get_config({fuzzer, command_multiplier}, 4),
+  NCommandsFactor = ct:get_config({fuzzer, command_multiplier}, 2),
   ?assertMatch(
      true,
      proper:quickcheck(

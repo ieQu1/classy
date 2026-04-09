@@ -30,7 +30,7 @@ test: smoke-test #concuerror_test
 smoke-test:
 	$(REBAR) eunit --cover
 	$(REBAR) ct --name ct --verbose --cover --readable false
-	$(REBAR) cover
+	$(REBAR) cover -v
 
 .PHONY: coveralls
 coveralls:
