@@ -340,8 +340,8 @@ t_070_cleanup(_Config) ->
      begin
        %% Prepare system:
        N1 = create_start_site(S1, Conf),
-       N2 = create_start_site(S2, Conf),
-       N3 = create_start_site(S3, Conf),
+       _N2 = create_start_site(S2, Conf),
+       _N3 = create_start_site(S3, Conf),
        {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
        ?assertMatch(ok, ?ON(S3, classy:join_node(N1, join))),
@@ -378,7 +378,7 @@ t_080_desync(_Config) ->
      begin
        %% Prepare system:
        N1 = create_start_site(S1, #{}),
-       N2 = create_start_site(S2, #{}),
+       _N2 = create_start_site(S2, #{}),
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
        #{cluster := Cluster} = ?ON(S1, classy_node:hello()),
        %% Emulate de-sync by setting counters to very high values:
@@ -391,7 +391,7 @@ t_080_desync(_Config) ->
        %% Wait until one of the sites detects the gap:
        ?block_until(#{?snk_kind := classy_membership_sync_gap}),
        %% Connect the third site to make sure the CRDT is healed:
-       N3 = create_start_site(S3, #{}),
+       _N3 = create_start_site(S3, #{}),
        ?assertMatch(ok, ?ON(S3, classy:join_node(N1, join))),
        [?retry(
            1000,

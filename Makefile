@@ -29,7 +29,7 @@ test: smoke-test #concuerror_test
 .PHONY: smoke-test
 smoke-test:
 	$(REBAR) eunit --cover
-	$(REBAR) ct --name ct --verbose --cover --readable false
+	$(REBAR) ct --name ct@127.0.0.1 --verbose --cover --readable false
 	$(REBAR) cover -v
 
 .PHONY: coveralls
@@ -38,7 +38,7 @@ coveralls:
 
 .PHONY: fuzz
 fuzz:
-	$(REBAR) ct --name ct --verbose --cover --suite classy_SUITE --case t_999_fuzz --readable false
+	$(REBAR) ct --name ct@127.0.0.1 --verbose --cover --suite classy_SUITE --case t_999_fuzz --readable false
 
 ##########################################################################################
 # Concuerror
