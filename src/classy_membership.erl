@@ -273,7 +273,7 @@ cast_sync(Cluster, Site, SyncData) ->
 %% @doc Send membership data to the process
 -spec call_sync(classy:cluster_id(), classy:site(), sync_data()) -> ok.
 call_sync(Cluster, Site, SyncData) ->
-  ?tp(notice, classy_membership_call_sync,
+  ?tp(debug, classy_membership_call_sync,
       #{ clus => Cluster
        , local => Site
        , clock => #cast_sync.c
@@ -447,7 +447,7 @@ local_command(C, #call_set{target = Target, k = K, v = V}, S = #s{site = Local})
               , val = V
               , owt = classy_lib:time_s()
               },
-  ?tp(notice, classy_membership_local_command,
+  ?tp(debug, classy_membership_local_command,
       #{ c => C
        , local => Local
        , k => K
