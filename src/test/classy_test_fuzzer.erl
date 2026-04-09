@@ -200,14 +200,14 @@ trace_and_run(MFA = {M, F, A}) ->
 format_cmds(Cmds) ->
   lists:map(
     fun({init, {init, Cfg}}) ->
-        io_lib:format(" *** Test configuration: ~p~n", [Cfg]);
+        io_lib:format("   %%% Test configuration: ~0p~n", [Cfg]);
        ({call, ?MODULE, init_cluster, [MS]}) ->
-        io_lib:format(" *** init(~0p)~n", [MS]);
+        io_lib:format("   %%% init(~0p)~n", [MS]);
        ({set, _, {call, M, F, Args}}) ->
         ArgsStr = [io_lib:format("~0p", [Arg]) || Arg <- Args],
-        io_lib:format(" *** ~p:~p(~s)~n", [M, F, lists:join(", ", ArgsStr)]);
+        io_lib:format("   ~p:~p(~s),~n", [M, F, lists:join(", ", ArgsStr)]);
        (Other) ->
-        io_lib:format(" *** other(~0p)~n", [Other])
+        io_lib:format(" %%% other(~0p)~n", [Other])
     end,
     Cmds).
 

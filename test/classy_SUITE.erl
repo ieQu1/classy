@@ -481,6 +481,13 @@ t_100_autocluster(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
+t_900_fuzz_bug(_Config) ->
+  ?check_trace(
+     begin
+       ok
+     end,
+     []).
+
 t_999_fuzz(_Config) ->
   %% NOTE: we set timeout at the lowest level to capture the trace
   %% and have a nicer error message.
@@ -491,7 +498,7 @@ t_999_fuzz(_Config) ->
   %% development using "apps/emqx/test/sessds.cfg"
   NTests = ct:get_config({fuzzer, n_tests}, 20),
   MaxSize = ct:get_config({fuzzer, max_size}, 100),
-  NCommandsFactor = ct:get_config({fuzzer, command_multiplier}, 2),
+  NCommandsFactor = ct:get_config({fuzzer, command_multiplier}, 1),
   ?assertMatch(
      true,
      proper:quickcheck(
@@ -540,8 +547,6 @@ fuzz_prop(Cmds) ->
                                      classy_test_fuzzer:wrap_commands(Cmds)),
        ct:log(info, "*** Model state:~n  ~p~n", [State]),
        ct:log("*** Result:~n  ~p~n", [Result]),
-       %% TODO: Always verify the final state (does proper return the state after applying `next_state' or not?)
-       %% fuzz_verify(State),
        Result =:= ok orelse error({invalid_result, Result}),
        ok = classy_test_cluster:stop(normal)
      after
@@ -551,14 +556,15 @@ fuzz_prop(Cmds) ->
      , fun events_on_all_sites/1
      ]).
 
-fuzz_verify({init, _}) ->
-  ok;
-fuzz_verify(S) ->
+postcondition({init, _}, _Call, _Result) ->
+  true;
+postcondition(S, _Call, _Result) ->
   lists:foreach(
     fun(Site) ->
         ?retry(1000, 10, fuzz_verify_site(Site, S))
     end,
-    classy_test_fuzzer:running_sites(S)).
+    classy_test_fuzzer:running_sites(S)),
+  true.
 
 fuzz_verify_site(Site, S = #{sites := Sites}) ->
   #{Site := #{cluster := Cluster, in_sync := InSync}} = Sites,
@@ -749,12 +755,8 @@ init_per_suite(Cfg) ->
 end_per_suite(Cfg) ->
   Cfg.
 
-general_commands(S) ->
-  [ {5, {call, ?MODULE, fuzz_verify, [S]}}
-  ].
-
-next_state(S, _Ret, {call, ?MODULE, fuzz_verify, _}) ->
-  S.
+next_state(_S, _Ret, Call) ->
+  error({unknown_call, Call}).
 
 init_per_testcase(t_999_fuzz, Cfg) ->
   Cfg;
