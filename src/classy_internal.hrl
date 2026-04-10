@@ -17,8 +17,7 @@
 -define(CLASSY_INTERNAL_HRL, true).
 
 -include_lib("snabbkaffe/include/trace.hrl").
-
--record(classy_kv, {k, v}).
+-include("classy.hrl").
 
 -define(on_node_init, on_node_init).
 -define(on_create_cluster, on_create_cluster).

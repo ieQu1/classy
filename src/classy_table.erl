@@ -97,10 +97,10 @@
 -define(w(K, V), {w, K, V}).
 -define(d(K), {d, K}).
 -define(clear, clear).
-%%   Markers inserted at beginning and end of flush, meant to prevent
-%%   restoration of aborted flush:
+%%   Markers inserted at beginning and end of flush, meant to prevent restoration of aborted flush:
 -define(flush_begin(I), {f, 0, I}).
 -define(flush_end(I), {f, 1, I}).
+%%   Note: only `w' and `d' operations can appear inside flush_begin/end span.
 
 -type op() :: ?w(_, _) | ?d(_) | ?clear | ?flush_begin(_) | ?flush_end(_).
 
