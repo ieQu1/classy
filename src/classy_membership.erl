@@ -77,7 +77,7 @@
                , target :: classy:site() %% Site which is being updated
                , k :: site_prop()        %% Property of the target site that is being updated
                , c :: clock()            %% Logical time at `origin' when it issued the command:
-               , m :: magic()            %% This term can be used to break ties
+               , m :: magic()            %% This term can be used to break ties. It's not super relevant.
                , val :: term()           %% Updated value
                , owt :: integer()        %% Origin's wall time when the update was made. This value
                                          %% isn't used by this module directly, but it gives hints to
@@ -402,8 +402,15 @@ terminate(Reason, #s{cluster = Cluster, site = Site}) ->
 %%================================================================================
 
 handle_flush(S0) ->
+  %% Note: `handle_sync_in' and `local_command' functions update the Lamport clock and other states using only dirty_write for performance.
+  %% It is correct, because losing these writes due to restart doesn't lead to any visible side effects.
+  %% Even if the table server restarts and loses pending writes, the restored state will be equivalent to not receiving the messages.
+  %% But *here* side effects are about to happen.
+  %% As such, it is important persist the changes.
   ok = classy_table:flush(?ptab),
   S = handle_sync_out(S0),
+  ok = classy_table:flush(?ptab),
+  %% This one updates hook cursor persistently, no need to flush again:
   run_hooks(S),
   S.
 

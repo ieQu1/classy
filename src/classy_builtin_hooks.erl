@@ -13,6 +13,7 @@
         , log_post_join/3
         , log_membership_change/4
         , log_run_level/2
+        , log_site_status_change/5
         ]).
 
 -include("classy_internal.hrl").
@@ -94,6 +95,17 @@ log_run_level(From, To) ->
   ?tp(info, classy_change_run_level,
       #{ from => From
        , to => To
+       }).
+
+log_site_status_change(_Cluster, _Local, Remote, Node, true) ->
+  ?tp(info, classy_peer_up,
+      #{ remote => Remote
+       , node   => Node
+       });
+log_site_status_change(_Cluster, _Local, Remote, Node, false) ->
+  ?tp(info, classy_peer_down,
+      #{ remote => Remote
+       , node   => Node
        }).
 
 %%================================================================================

@@ -173,6 +173,7 @@ peer_info() ->
         { cluster :: classy:cluster_id() | undefined
         , site :: classy:site()
         , run_level = 0 :: run_level_int()
+        , peer_state = #{} :: #{classy:site() => {node(), boolean()}}
         }).
 
 %% @private
@@ -352,8 +353,8 @@ handle_membership_change_event(
   end.
 
 -spec update_runtime(#s{}) -> #s{}.
-update_runtime(S) ->
-  update_sites_status(S),
+update_runtime(S0) ->
+  S = update_sites_status(S0),
   adjust_run_level(S).
 
 handle_kick(Cluster, Local, Target, Intent) ->
@@ -442,49 +443,75 @@ join_cluster(Cluster, JoinToNode, Local, S = #s{run_level = 0}) ->
   {ok, _} = classy_sup:ensure_membership(Cluster, Local),
   classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode]),
   set_val(?the_cluster, Cluster),
-  {ok, S#s{cluster = Cluster}}.
+  {ok, S#s{cluster = Cluster, peer_state = #{}}}.
 
 %% Update node tracking information
-update_sites_status(#s{cluster = Cluster, site = Local}) ->
+-spec update_sites_status(#s{}) -> #s{}.
+update_sites_status(S0 = #s{cluster = Cluster, site = Local}) ->
   %% Gather data:
   Nodes = [node() | erlang:nodes()],
   Members = classy_membership:members(Cluster, Local),
   NodesOfSite = classy_membership:node_of_site(Cluster, Local),
   %% Update members:
-  lists:foreach(
-    fun(Site) ->
-        case NodesOfSite of
-          #{Site := Node} ->
-            IsUp = lists:member(Node, Nodes);
-          #{} ->
-            Node = undefined,
-            IsUp = false
+  S1 = lists:foldl(
+         fun(Site, Acc) ->
+             case NodesOfSite of
+               #{Site := Node} ->
+                 IsUp = lists:member(Node, Nodes);
+               #{} ->
+                 Node = undefined,
+                 IsUp = false
+             end,
+             case classy_table:lookup(?site_info, Site) of
+               [#site_info{isup = IsUp, node = Node}] ->
+                 %% No changes:
+                 ok;
+               _ ->
+                 classy_table:dirty_write(
+                   ?site_info,
+                   Site,
+                   #site_info{ isup = IsUp
+                             , node = Node
+                             , last_update = classy_lib:time_s()
+                             })
+             end,
+             maybe_on_site_status_change(Acc, Site, Node, IsUp, true)
         end,
-        case classy_table:lookup(?site_info, Site) of
-          [#site_info{isup = IsUp, node = Node}] ->
-            %% No changes:
-            ok;
-          _ ->
-            classy_table:dirty_write(
-              ?site_info,
-              Site,
-              #site_info{ isup = IsUp
-                        , node = Node
-                        , last_update = classy_lib:time_s()
-                        })
-        end
-    end,
-    Members),
+        S0,
+        Members),
   %% Delete info of gone members:
-  ets:foldl(
-    fun(#classy_kv{k = Site}, Acc) ->
-        lists:member(Site, Members) orelse
-          classy_table:dirty_delete(?site_info, Site),
-        Acc
-    end,
-    [],
-    ?site_info),
-  classy_table:flush(?site_info).
+  S = ets:foldl(
+        fun(#classy_kv{k = Site, v = #site_info{node = Node}}, Acc) ->
+            case lists:member(Site, Members) of
+              true ->
+                Acc;
+              false ->
+                classy_table:dirty_delete(?site_info, Site),
+                maybe_on_site_status_change(Acc, Site, Node, false, false)
+            end
+        end,
+        S1,
+        ?site_info),
+  classy_table:flush(?site_info),
+  S.
+
+-spec maybe_on_site_status_change(#s{}, classy:site(), node() | undefined, boolean(), boolean()) -> #s{}.
+maybe_on_site_status_change(S = #s{cluster = Cluster, site = Local, peer_state = PS0}, Site, Node, IsUp, Keep) ->
+  Changed = case PS0 of
+              #{Site := {Node, IsUp}} ->
+                false;
+              #{} ->
+                classy_hook:foreach(?on_site_status_change, [Cluster, Local, Site, Node, IsUp]),
+                true
+            end,
+  PS = if Changed andalso Keep ->
+           PS0#{Site => {Node, IsUp}};
+          not Keep ->
+           maps:remove(Site, PS0);
+          true ->
+           PS0
+       end,
+  S#s{peer_state = PS}.
 
 init_cluster() ->
   maybe

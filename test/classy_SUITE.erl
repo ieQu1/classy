@@ -639,7 +639,7 @@ no_unexpected_events(Trace) ->
      ?of_kind(
         [ ?classy_unknown_event
         , ?classy_abnormal_exit
-        , classy_table_aborted_compaction
+        , ?classy_table_anomaly
         , classy_hook_failure
         , classy_discovery_failure
         , classy_table_on_update_callback_failure
@@ -674,7 +674,9 @@ site_events(Site, Trace) ->
 validate_site_event(Prev, #{?snk_kind := Kind}) when
     Kind =:= classy_member_join;
     Kind =:= classy_member_leave;
-    Kind =:= classy_init_clustering ->
+    Kind =:= classy_init_clustering;
+    Kind =:= classy_peer_up;
+    Kind =:= classy_peer_down ->
   Prev;
 %%    Site creation:
 validate_site_event(undefined,
@@ -738,7 +740,10 @@ site_of_event(#{?snk_kind := Kind, local := Site}) when
     Kind =:= classy_kicked_from_cluster;
     Kind =:= classy_init_clustering ->
   Site;
-site_of_event(#{?snk_kind := classy_change_run_level, ?snk_meta := #{local := Site}}) ->
+site_of_event(#{?snk_kind := Kind, ?snk_meta := #{local := Site}}) when
+    Kind =:= classy_change_run_level;
+    Kind =:= classy_peer_up;
+    Kind =:= classy_peer_down ->
   Site;
 site_of_event(#{?snk_kind := classy_test_site_stop, site := Site}) ->
   Site;

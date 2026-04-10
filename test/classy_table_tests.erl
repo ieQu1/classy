@@ -7,6 +7,7 @@
 
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
+-include("classy_internal.hrl").
 
 %%================================================================================
 %% Tests
@@ -246,6 +247,50 @@ reopen_effects_test() ->
                ?projection(op, ?of_kind(classy_table_update, After)))
         end}
      ]).
+
+%% This test verifies that a flush that was aborted mid-way doesn't
+%% get partially restored.
+botched_flush_test() ->
+  Clean = setup(?FUNCTION_NAME),
+  T = ?FUNCTION_NAME,
+  Opts = opts(#{ets_options => [ordered_set]}),
+  ?check_trace(
+     try
+       %% Insert data:
+       ?assertEqual(ok, classy_table:open(T, Opts)),
+       %% Write some values:
+       [?assertEqual(ok, classy_table:dirty_write(T, N, N)) || N <- lists:seq(1, 5)],
+       %% Close table and reopen its WAL:
+       ?assertEqual(ok, classy_table:stop(T, infinity)),
+       {ok, Dir} = application:get_env(classy, table_dir),
+       WAL = filename:join(Dir, atom_to_list(T)),
+       ?assert(filelib:is_file(WAL)),
+       {ok, Log} = disk_log:open([ {name, make_ref()}
+                                 , {file, WAL}
+                                 , {type, halt}
+                                 , {format, internal}
+                                 , {repair, true}
+                                 ]),
+       %% Write some data there to emulate series of aborted flushes:
+       ok = disk_log:log_terms(Log,
+                               [ {f, 0, 5}, {w, 1, bad}, {d, 2}, {w, 3, bad}
+                               , {f, 0, 10}, {w, 4, bad}, {d, 5}
+                               ]),
+       ok = disk_log:close(Log),
+       %% Reopen the table.
+       ?assertEqual(ok, classy_table:open(T, Opts)),
+       %% Its contents should be unchanged:
+       ?assertEqual(
+          [[I, I] || I <- lists:seq(1, 5)],
+          ets:match(T, #classy_kv{k = '$1', v = '$2'}))
+     after
+       cleanup(Clean)
+     end,
+     fun(Trace) ->
+         ?assertMatch(
+            [_, _],
+            ?of_kind(?classy_table_anomaly, Trace))
+     end).
 
 %%================================================================================
 %% Helper functions

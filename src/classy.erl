@@ -45,7 +45,6 @@
              , cluster_info/0
 
              , run_level/0
-             , site_status_hook/0
              , membership_change_hook/0
              ]).
 
@@ -81,8 +80,6 @@
         #{ clusters  := #{cluster_id() => [[{site(), node()}]]}
          , bad_nodes := [node()]
          }.
-
--type site_status_hook() :: fun((cluster_id(), _Local :: site(), _Up :: boolean()) -> _).
 
 -type membership_change_hook() :: fun((cluster_id(), _Local :: site(), _Remote :: site(), _IsMember :: boolean()) -> _).
 
@@ -256,7 +253,13 @@ on_create_site(Hook, Prio) ->
 
 %% @doc Register a hook that is executed when a site changes
 %% status from up to down and vice versa.
--spec on_site_status_change(site_status_hook(), classy_hook:prio()) -> classy_hook:hook().
+%%
+%% Note: this hook runs in the classy main process.
+%% Hence it should avoid blocking it.
+-spec on_site_status_change(Fun, classy_hook:prio()) -> classy_hook:hook()
+   when Fun :: fun((cluster_id(), Local, Remote, node(), _IsUp :: boolean()) -> _),
+        Local :: site(),
+        Remote :: site().
 on_site_status_change(Hook, Prio) ->
   classy_hook:insert(?on_site_status_change, Hook, Prio).
 

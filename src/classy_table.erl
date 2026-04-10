@@ -8,7 +8,27 @@
 %% It is used to persistently save classy's own data.
 %% Other applications can also use it for data that doesn't require replication and is not written too frequently.
 %%
-%% It is meant for small volumes of data and infrequent updates.
+%% == Limitations ==
+%% <itemize>
+%% <li>
+%% All "dirty" operation are volatile:
+%% they update only RAM cache and do not get persisted on disk until `flush' is called or the table server terminates.
+%% They are meant for the situations where some keys are frequently updated,
+%% but these updates can be lost.
+%%
+%% There is no automatic flushing,
+%% the business code must flush explicitly.
+%%
+%% If it fails to do so,
+%% all work for persisting the data will be done on terminate,
+%% which may be risky due to various timeouts.
+%% </li>
+%%
+%% <li>
+%% This module is meant for small volumes of data and infrequent updates.
+%% It's optimized for simplicity, not storage efficiency or performance.
+%% </li>
+%% </itemize>
 -module(classy_table).
 
 -behavior(gen_server).
@@ -77,6 +97,22 @@
 -define(w(K, V), {w, K, V}).
 -define(d(K), {d, K}).
 -define(clear, clear).
+%%   Markers inserted at beginning and end of flush, meant to prevent restoration of aborted flush:
+-define(flush_begin(I), {f, 0, I}).
+-define(flush_end(I), {f, 1, I}).
+%%   Note: only `w' and `d' operations can appear inside flush_begin/end span.
+
+-type op() :: ?w(_, _) | ?d(_) | ?clear | ?flush_begin(_) | ?flush_end(_).
+
+-record(restore_state,
+        { %% Currently pending atomicity marker:
+          marker :: integer()
+          %% Reversed list of operations pending restore:
+        , ops :: [?w(_, _) | ?d(_)]
+        }).
+
+-type restore_state() :: none %% No atomicity marker is active
+                       | #restore_state{}.
 
 -define(call_timeout, infinity).
 
@@ -152,6 +188,10 @@ delete(Tab, Key) ->
     ?call_timeout).
 
 %% @doc Persist all records that got dirtied prior to this call to WAL.
+%%
+%% Flush is atomic, meaning either all or none dirty operations are restored.
+%% However, if multiple processes perform unsynchronized dirty writes and flushes in parallel,
+%% data can be restore partially.
 -spec flush(tab()) -> ok.
 flush(Tab) ->
   gen_server:call(
@@ -304,8 +344,9 @@ terminate(Reason, S) ->
   case S of
     undefined ->
       ok;
-    #s{} ->
+    #s{log = Log} ->
       handle_flush(S),
+      disk_log:close(Log),
       exec_on_update(close, S)
   end.
 
@@ -314,7 +355,7 @@ terminate(Reason, S) ->
 %%================================================================================
 
 -spec restore(s()) -> s().
-restore(S = #s{ets = ETS}) ->
+restore(S = #s{name = Name, ets = ETS}) ->
   RegularName = log_name(S, ""),
   NewName = log_name(S, ".NEW"),
   ets:match_delete(ETS, '_'),
@@ -325,38 +366,102 @@ restore(S = #s{ets = ETS}) ->
     {true, false} ->
       %% Normal case:
       {ok, Log} = open_log(RegularName, read_write),
-      {ok, LogSize} = do_restore(Log, start, ETS, 0),
+      {ok, LogSize} = do_restore(Name, Log, start, none, ETS, 0),
       exec_on_update_open(S),
       S#s{ log = Log
          , log_size = LogSize
          };
     {true, true} ->
       %% Server was stopped while compaction was ongling:
-      logger:warning(#{ msg => classy_table_aborted_compaction
+      logger:warning(#{ msg      => ?classy_table_anomaly
+                      , type     => aborted_compaction
                       , log_name => NewName
                       }),
-      ok = rename_log(NewName, NewName ++ ".bup"),
+      file:delete(NewName),
       restore(S);
     {false, true} ->
       %% Should not happen:
       exit({classy_unrecoverable_aborted_table_compaction, NewName})
   end.
 
-do_restore(Log, Cont0, ETS, N) ->
+do_restore(Name, Log, Cont0, RestoreState0, ETS, N) ->
   case read_log_chunk(Log, Cont0, batch_size()) of
     {ok, Cont, Chunk} ->
-      lists:foreach(
-        fun(?w(K, V)) ->
-            ets:insert(ETS, #classy_kv{k = K, v = V});
-           (?d(K)) ->
-            ets:delete(ETS, K);
-           (?clear) ->
-            ets:match_delete(ETS, '_')
-        end,
-       Chunk),
-      do_restore(Log, Cont, ETS, N + length(Chunk));
+      RestoreState =
+        lists:foldl(
+          fun(Op, Acc) -> do_restore_op(Name, ETS, Op, Acc) end,
+          RestoreState0,
+          Chunk),
+      do_restore(Name, Log, Cont, RestoreState, ETS, N + length(Chunk));
     eof ->
+      case RestoreState0 of
+        none ->
+          ok;
+        #restore_state{marker = Marker} ->
+          %% Flush was aborted mid-flight. Discard data:
+          ?tp(error, ?classy_table_anomaly,
+              #{ type   => aborted_flush
+               , table  => Name
+               , marker => Marker
+               })
+      end,
       {ok, N}
+  end.
+
+-spec do_restore_op(tab(), ets:tid(), op(), restore_state()) -> restore_state().
+do_restore_op(Name, ETS, Op, S0 = #restore_state{marker = Marker, ops = OpsAcc}) ->
+  %% Flush is ongoing.
+  %% To avoid restoring a partially flushed state,
+  %% do not apply operations to the ETS, accumulate them in `OpsAcc'.
+  case Op of
+    ?flush_end(Marker) ->
+      %% Note: order of operations is irrelevant:
+      %% during flush we just iterate over map keys in random order.
+      %% So, no `lists:reverse'.
+      _ = [do_restore_op(Name, ETS, I, none) || I <- OpsAcc],
+      none;
+    ?flush_begin(NewMarker) ->
+      %% Flush was aborted mid-flight. Discard data:
+      ?tp(error, ?classy_table_anomaly,
+          #{ type   => aborted_flush
+           , table  => Name
+           , marker => Marker
+           }),
+      #restore_state{marker = NewMarker, ops = []};
+    ?w(_, _) = Op ->
+      S0#restore_state{ops = [Op | OpsAcc]};
+    ?d(_) = Op ->
+      S0#restore_state{ops = [Op | OpsAcc]};
+    Other ->
+      ?tp(error, ?classy_table_anomaly,
+          #{ type  => aborted_flush
+           , table => Name
+           , op    => Other
+           , state => S0
+           }),
+      none
+  end;
+do_restore_op(Name, ETS, Op, none) ->
+  case Op of
+    ?w(K, V) ->
+      ets:insert(ETS, #classy_kv{k = K, v = V}),
+      none;
+    ?d(K) ->
+      ets:delete(ETS, K),
+      none;
+    ?clear ->
+      ets:match_delete(ETS, '_'),
+      none;
+    ?flush_begin(Marker) ->
+      #restore_state{marker = Marker, ops = []};
+    Other ->
+      ?tp(error, ?classy_table_anomaly,
+          #{ type  => unexpected_operation
+           , table => Name
+           , op    => Other
+           , state => none
+           }),
+      none
   end.
 
 -spec log_name(s(), string()) -> file:filename().
@@ -399,6 +504,9 @@ handle_flush(S = #s{log = Log, dirty = Dirty}) when Log =:= undefined;
                                                     map_size(Dirty) =:= 0 ->
   S;
 handle_flush(S = #s{ets = ETS, log = Log, dirty = Dirty, log_size = LogSize0}) ->
+  Marker = LogSize0,
+  BeginMarker = ?flush_begin(Marker),
+  EndMarker = ?flush_end(Marker),
   {LogSize, Ops} =
     maps:fold(
       fun(K, _, {AccNW, AccOps}) ->
@@ -410,11 +518,11 @@ handle_flush(S = #s{ets = ETS, log = Log, dirty = Dirty, log_size = LogSize0}) -
           , [Op | AccOps]
           }
       end,
-      {LogSize0, []},
+      {LogSize0, [EndMarker]},
       Dirty),
-  ok = write_log(Log, Ops),
+  ok = write_log(Log, [BeginMarker|Ops]),
   S#s{ dirty = #{}
-     , log_size = LogSize
+     , log_size = LogSize + 2 %% account for the markers
      }.
 
 -spec exec_on_update_open(#s{}) -> ok.
@@ -555,7 +663,14 @@ open_log(Filename, Mode) ->
   case disk_log:open(Opts) of
     {ok, Log} ->
       {ok, Log};
-    {repaired, Log, _Recovered, _BadBytes} ->
+    {repaired, Log, {recovered, Recovered}, {badbytes, BadBytes}} ->
+      BadBytes > 0 andalso
+        ?tp(error, ?classy_table_anomaly,
+            #{ type      => wal_bad_bytes
+             , file      => Filename
+             , recovered => Recovered
+             , bad_bytes => BadBytes
+             }),
       {ok, Log};
     {error, Reason} ->
       {error, Reason}
