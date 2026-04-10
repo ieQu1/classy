@@ -1,6 +1,19 @@
 %%--------------------------------------------------------------------
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
+
+%% @doc A process that automatically kicks sites that have been absent for a long time.
+%%
+%% Relevant configurations are `max_site_downtime' and `quorum'.
+%%
+%% == Network partitions ==
+%%
+%% In a partitioned network there is a risk that sites try to kick each other.
+%%
+%% Autoclean requires quorum of running nodes before making the decision to kick.
+%% Note: as `quorum(running)' is always >= `quorum(config)',
+%% even in a partition containing single node,
+%% autoclean won't activate if `quorum' config is set to a value > 1.
 -module(classy_autoclean).
 
 -behavior(gen_server).
@@ -155,4 +168,4 @@ check_interval() ->
 
 -spec forget_after() -> pos_integer().
 forget_after() ->
-  application:get_env(classy, cleanup_check_interval, 7 * 24 * 60 * 60).
+  application:get_env(classy, forget_after, 7 * 24 * 60 * 60).

@@ -373,10 +373,11 @@ restore(S = #s{name = Name, ets = ETS}) ->
          };
     {true, true} ->
       %% Server was stopped while compaction was ongling:
-      logger:warning(#{ msg      => ?classy_table_anomaly
-                      , type     => aborted_compaction
-                      , log_name => NewName
-                      }),
+      ?tp(warning, ?classy_table_anomaly,
+         #{ type     => aborted_compaction
+          , table    => Name
+          , log_name => NewName
+          }),
       file:delete(NewName),
       restore(S);
     {false, true} ->
@@ -583,11 +584,12 @@ do_compaction(S0 = #s{name = Name, ets = Ets}) ->
      {ok, S#s{log = Log, dirty = #{}, log_size = LogSize}}
   catch
     EC:Err:Stack ->
-      logger:error(#{ msg => failed_to_compact_classy_log
-                    , EC => Err
-                    , stack => Stack
-                    , table => Name
-                    }),
+      ?tp(error, ?classy_table_anomaly,
+          #{ type  => failed_compaction
+           , EC    => Err
+           , stack => Stack
+           , table => Name
+           }),
       {error, Err, S}
   end.
 

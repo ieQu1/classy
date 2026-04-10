@@ -58,7 +58,7 @@ Type: `pos_integer()`.
 
 Default: 1.
 
-Minimum number of running members necessary to advance `run_stage` from `single` to `cluster`.
+Minimum number of running members necessary to advance run level from `single` to `cluster`.
 
 ## `classy.quorum`
 
@@ -66,7 +66,7 @@ Type: `pos_integer()`.
 
 Default: 1.
 
-Minimum number of running members necessary to advance `run_stage` from `cluster` to `quorum`.
+Minimum number of running members necessary to advance run level from `cluster` to `quorum`.
 
 ## `classy.max_site_downtime`
 
@@ -100,7 +100,7 @@ Note: cleanup procedure may lead to the following situation:
 
 Since at step 4 we removed the data about event 2, A will reappear in the cluster.
 
-So `forget_timeout` should be set to a fairly large value to make sure it doesn't cover nodes that can go back online.
+So `forget_after` should be set to a fairly large value to make sure it doesn't cover nodes that can go back online.
 
 ## `classy.cleanup_check_interval`
 
@@ -131,7 +131,7 @@ Join to one of the nodes explicitly specified in the list.
 
 ### DNS
 
-```
+```erlang
 {dns, #{
   name := string(),
   type => a | aaaa | srv,
@@ -154,7 +154,7 @@ It's recommended to use SRV records.
 
 ### K8S
 
-```
+```erlang
 {k8s, #{
   namespace := string(),
   app       := string(),
@@ -174,7 +174,7 @@ This strategy queries the Kubernetes API at `/api/v1/namespaces/{namespace}/endp
 
 TODO
 
-```
+```erlang
 {etcd, #{
   endpoints := [string()],
   prefix    := string()
@@ -203,7 +203,7 @@ and the same value is used for the cluster ID.
 
 Business applications can override this behavior by registering `on_node_init` hook containing a call to `classy_node:maybe_init_the_site`:
 
-```
+```erlang
 classy:on_node_init(
   fun() ->
       classy_node:maybe_init_the_site(SiteId)

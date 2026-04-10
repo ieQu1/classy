@@ -516,10 +516,10 @@ handle_sync_out(S = #s{cluster = Cluster}) ->
         Data = get_sync_data(Since, Acked, S),
         ?tp(debug, classy_membership_sync_target,
             #{ remote => Site
-             , noe => Node
-             , since => Since
-             , acked => Acked
-             , data => Data
+             , node   => Node
+             , since  => Since
+             , acked  => Acked
+             , data   => Data
              }),
         case node() of
           Node -> ?MODULE:cast_sync(Cluster, Site, Data);

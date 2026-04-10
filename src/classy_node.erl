@@ -549,7 +549,7 @@ ensure_value(Key, OnCreateHook, HookArgs, Default) ->
       {true, Val}
   end.
 
-set_val(Key, Val) when is_binary(Val), Key =/= ?the_site orelse Key =/= ?the_cluster ->
+set_val(Key, Val) when is_binary(Val) ->
   classy_table:write(?ptab, Key, Val).
 
 -spec adjust_run_level(#s{}) -> #s{}.
