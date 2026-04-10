@@ -666,7 +666,7 @@ open_log(Filename, Mode) ->
     {repaired, Log, {recovered, Recovered}, {badbytes, BadBytes}} ->
       BadBytes > 0 andalso
         ?tp(error, ?classy_table_anomaly,
-            #{ type      => log_bad_bytes
+            #{ type      => wal_bad_bytes
              , file      => Filename
              , recovered => Recovered
              , bad_bytes => BadBytes
