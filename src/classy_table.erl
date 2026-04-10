@@ -8,7 +8,27 @@
 %% It is used to persistently save classy's own data.
 %% Other applications can also use it for data that doesn't require replication and is not written too frequently.
 %%
-%% It is meant for small volumes of data and infrequent updates.
+%% == Limitations ==
+%% <itemize>
+%% <li>
+%% All "dirty" operation are volatile:
+%% they update only RAM cache and do not get persisted on disk until `flush' is called or the table server terminates.
+%% They are meant for the situations where some keys are frequently updated,
+%% but these updates can be lost.
+%%
+%% There is no automatic flushing,
+%% the business code must flush explicitly.
+%%
+%% If it fails to do so,
+%% all work for persisting the data will be done on terminate,
+%% which may be risky due to various timeouts.
+%% </li>
+%%
+%% <li>
+%% This module is meant for small volumes of data and infrequent updates.
+%% It's optimized for simplicity, not storage efficiency or performance.
+%% </li>
+%% </itemize>
 -module(classy_table).
 
 -behavior(gen_server).
@@ -168,6 +188,10 @@ delete(Tab, Key) ->
     ?call_timeout).
 
 %% @doc Persist all records that got dirtied prior to this call to WAL.
+%%
+%% Flush is atomic, meaning either all or none dirty operations are restored.
+%% However, if multiple processes perform unsynchronized dirty writes and flushes in parallel,
+%% data can be restore partially.
 -spec flush(tab()) -> ok.
 flush(Tab) ->
   gen_server:call(
@@ -320,8 +344,9 @@ terminate(Reason, S) ->
   case S of
     undefined ->
       ok;
-    #s{} ->
+    #s{log = Log} ->
       handle_flush(S),
+      disk_log:close(Log),
       exec_on_update(close, S)
   end.
 
@@ -348,10 +373,11 @@ restore(S = #s{name = Name, ets = ETS}) ->
          };
     {true, true} ->
       %% Server was stopped while compaction was ongling:
-      logger:warning(#{ msg => classy_table_aborted_compaction
+      logger:warning(#{ msg      => ?classy_table_anomaly
+                      , type     => aborted_compaction
                       , log_name => NewName
                       }),
-      ok = rename_log(NewName, NewName ++ ".bup"),
+      file:delete(NewName),
       restore(S);
     {false, true} ->
       %% Should not happen:
@@ -408,12 +434,12 @@ do_restore_op(Name, ETS, Op, S0 = #restore_state{marker = Marker, ops = OpsAcc})
       S0#restore_state{ops = [Op | OpsAcc]};
     Other ->
       ?tp(error, ?classy_table_anomaly,
-          #{ type  => unexpected_operation
+          #{ type  => aborted_flush
            , table => Name
            , op    => Other
-           , state => none
+           , state => S0
            }),
-      S0
+      none
   end;
 do_restore_op(Name, ETS, Op, none) ->
   case Op of
@@ -637,7 +663,14 @@ open_log(Filename, Mode) ->
   case disk_log:open(Opts) of
     {ok, Log} ->
       {ok, Log};
-    {repaired, Log, _Recovered, _BadBytes} ->
+    {repaired, Log, {recovered, Recovered}, {badbytes, BadBytes}} ->
+      BadBytes > 0 andalso
+        ?tp(error, ?classy_table_anomaly,
+            #{ type      => log_bad_bytes
+             , file      => Filename
+             , recovered => Recovered
+             , bad_bytes => BadBytes
+             }),
       {ok, Log};
     {error, Reason} ->
       {error, Reason}
