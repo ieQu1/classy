@@ -67,8 +67,6 @@
            cluster := classy:cluster_id() | undefined
          , running := boolean()
          , conf := classy_test_site:conf()
-         , in_sync := boolean()
-         , cluster_view := [classy:site()]
          }.
 
 -type s() ::
@@ -324,8 +322,6 @@ next_state(_, _Ret, {call, ?MODULE, init_cluster, [TestConf]}) ->
                  , #{ cluster      => Acc
                     , running      => false
                     , conf         => Conf
-                    , in_sync      => true
-                    , cluster_view => [Site]
                     }
                  },
           {Elem, Acc + 1}
@@ -351,7 +347,7 @@ next_state(S = #{sites := Sites}, _Ret, {call, ?MODULE, join_node, [Origin, Targ
     Origin,
     fun(SiteS) ->
         %% Joining to a live node syncs the origin:
-        SiteS#{cluster := Cluster, in_sync := true}
+        SiteS#{cluster := Cluster}
     end,
     S);
 next_state(S, _Ret, {call, ?MODULE, kick_site, [_Origin, Target | _]}) ->
@@ -360,7 +356,7 @@ next_state(S, _Ret, {call, ?MODULE, kick_site, [_Origin, Target | _]}) ->
     Target,
     fun(SiteS = #{running := Running}) ->
         %% If site is kicked while stopped, we mark it as out-of-sync:
-        SiteS#{cluster := NextClusterId, in_sync := Running}
+        SiteS#{cluster := NextClusterId}
     end,
     S#{cluster_id := NextClusterId + 1});
 next_state(S = #{module := Mod}, Ret, Command) ->
@@ -378,8 +374,23 @@ precondition(S, {call, ?MODULE, kick_site, [Local, Target|_]}) ->
 precondition(S, {call, ?MODULE, join_node, [Local, Target|_]}) ->
   is_running(Local, S) andalso
   is_running(Target, S) andalso
-  in_sync(Target, S) andalso
   Local =/= Target;
+precondition(S, {call, classy_test_site, stop, [Site]}) ->
+  %% For simplicity, we avoid stopping all sites in clusters that have >1 sites.
+  %% Stopping all sites at once leads to loss of synchronization and split views,
+  %% since the site that recieved the last command may become unable to propagate data.
+  %% Verifying such scenarios requires a more sophisticated model than we have now.
+  Peers = sites_of_cluster(cluster_of(Site, S), S),
+  case Peers of
+    [_] ->
+      %% Singleton clusters don't have this problem:
+      true;
+    _ ->
+      case [I || I <- Peers -- [Site], is_running(I, S)] of
+        [] -> false;
+        _  -> true
+      end
+  end;
 precondition(S, Call) ->
   optcall(S, precondition, [S, Call], true).
 
@@ -420,10 +431,6 @@ postcondition(PrevState, Call, Result) ->
 %%================================================================================
 %% Internal functions
 %%================================================================================
-
-in_sync(Site, #{sites := Sites}) ->
-  #{Site := #{in_sync := InSync}} = Sites,
-  InSync.
 
 cluster_of(Site, #{sites := Sites}) ->
   #{Site := #{cluster := C}} = Sites,

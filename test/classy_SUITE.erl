@@ -618,42 +618,38 @@ postcondition(S, _Call, _Result) ->
   true.
 
 fuzz_verify_site(Site, S = #{sites := Sites}) ->
-  #{Site := #{cluster := Cluster, in_sync := InSync}} = Sites,
-  %% This property always holds, regardless of the sync status:
+  #{Site := #{cluster := Cluster}} = Sites,
   no_stopped_nodes_reported_as_running(Site, S),
   %% Verify list of peer sites:
   ExpectedSites = classy_test_fuzzer:sites_of_cluster(Cluster, S),
-  InSync andalso
-    ?assertSameSet(
-       ExpectedSites,
-       classy_test_site:call(Site, classy, sites, []),
-       #{ on => Site
-        , msg => "View of the cluster"
-        , diagnostic => diagnostic(Site, S)
-        , model_state => S
-        }),
+  ?assertSameSet(
+     ExpectedSites,
+     classy_test_site:call(Site, classy, sites, []),
+     #{ on => Site
+      , msg => "View of the cluster"
+      , diagnostic => diagnostic(Site, S)
+      , model_state => S
+      }),
   %% Verify list of all nodes:
-  InSync andalso
-    ?assertSameSet(
-       [fuzz_node_name(I) || I <- ExpectedSites],
-       classy_test_site:call(Site, classy, nodes, [all]),
-       #{ on  => Site
-        , msg => "View of all nodes"
-        , diagnostic => diagnostic(Site, S)
-        , model_state => S
-        }),
+  ?assertSameSet(
+     [fuzz_node_name(I) || I <- ExpectedSites],
+     classy_test_site:call(Site, classy, nodes, [all]),
+     #{ on  => Site
+      , msg => "View of all nodes"
+      , diagnostic => diagnostic(Site, S)
+      , model_state => S
+      }),
   %% Check running nodes:
-  InSync andalso
-    ?assertSameSet(
-       [fuzz_node_name(I)
-        || I <- ExpectedSites,
-           classy_test_fuzzer:is_running(I, S)],
-       classy_test_site:call(Site, classy, nodes, [running]),
-       #{ on  => Site
-        , msg => "View of running nodes"
-        , diagnostic => diagnostic(Site, S)
-        , model_state => S
-        }),
+  ?assertSameSet(
+     [fuzz_node_name(I)
+      || I <- ExpectedSites,
+         classy_test_fuzzer:is_running(I, S)],
+     classy_test_site:call(Site, classy, nodes, [running]),
+     #{ on  => Site
+      , msg => "View of running nodes"
+      , diagnostic => diagnostic(Site, S)
+      , model_state => S
+      }),
   ok.
 
 %% This function fails if `Site' reports any site that must be stopped
@@ -907,7 +903,7 @@ diagnostic(_Site, #{sites := Sites}) ->
             catch classy_test_site:call(
                     Site,
                     fun() ->
-                        #{ members => catch ets:tab2list(classy_membership)
+                        #{ members => classy_membership:dump()
                          , node => catch ets:tab2list(classy_node)
                          }
                     end);
