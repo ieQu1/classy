@@ -146,6 +146,7 @@ stop(Tab, Timeout) ->
         {'DOWN', MRef, process, _, _} ->
           ok
       after Timeout ->
+          demonitor(MRef, [flush]),
           {error, timeout}
       end;
     undefined ->

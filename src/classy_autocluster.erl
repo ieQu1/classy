@@ -228,7 +228,7 @@ filter_discovered_nodes(Candidates, BadNodes, Nodes) ->
 try_join(_Cluster, []) ->
   ignore;
 try_join(Cluster, [Node | Rest]) ->
-  case classy_node:join_node(Node, intent, Cluster) of
+  case classy_node:join_node(Node, autocluster, Cluster) of
     ok ->
       ok;
     _ ->
