@@ -29,7 +29,7 @@
         , setup_hooks/1
         , join_node/4
         , kick_site/4
-        , start_site/1
+        , start_site/2
         ]).
 
 -export_type([test_conf/0]).
@@ -169,14 +169,30 @@ kick_site(Origin, Target, Intent, S) ->
     ?match_event(#{?snk_kind := classy_member_leave, remote := Target}),
     S).
 
-start_site(Site) ->
-  ?wait_async_action(
-     classy_test_site:start(Site),
-     #{ ?snk_kind := classy_change_run_level
-      , to        := single
-      , ?snk_meta := #{local := Site}
-      },
-     ?sync_timeout).
+start_site(Site, S) ->
+  %% Note: since in non-singleton clusters we don't stop all sites,
+  %% we can wait for a sync-in event to make sure the re-started site is synced:
+  NEvents = case sites_of_cluster(cluster_of(Site, S), S) of
+              [_] -> 1;
+              _   -> 2
+            end,
+  {ok, Sub} = snabbkaffe:subscribe(
+                fun(#{ ?snk_kind := classy_change_run_level
+                     , to := single
+                     , ?snk_meta := #{local := Site}
+                     }) ->
+                    true;
+                   (#{ ?snk_kind := classy_membership_sync_in
+                     , ?snk_meta := #{local := Site}
+                     }) ->
+                    true;
+                   (_) ->
+                    false
+                end,
+                NEvents,
+                ?sync_timeout),
+  Ret = classy_test_site:start(Site),
+  {Ret, snabbkaffe:receive_events(Sub)}.
 
 %%================================================================================
 %% Utility functions
@@ -283,7 +299,7 @@ running_site_command_(Site, S = #{sites := Sites}) ->
 
 stopped_site_command_(Site, S) ->
   frequency(
-    [ {10, {call, ?MODULE, start_site, [Site]}}
+    [ {10, {call, ?MODULE, start_site, [Site, S]}}
     | optcall(S, stopped_site_command, [Site, S], [])
     ]).
 
@@ -331,7 +347,7 @@ next_state(_, _Ret, {call, ?MODULE, init_cluster, [TestConf]}) ->
   TestConf#{ sites      := maps:from_list(Sites)
            , cluster_id => NextClusterId
            };
-next_state(S, _Ret, {call, ?MODULE, start_site, [Site]}) ->
+next_state(S, _Ret, {call, ?MODULE, start_site, [Site | _]}) ->
   update_site(
     Site,
     fun(SiteS) -> SiteS#{running := true} end,
