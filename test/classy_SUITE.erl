@@ -492,6 +492,7 @@ t_090_info(_Config) ->
           ?ON(S1, classy:clusters([N1, N2, 'fake@node.local']))),
        %% Form cluster:
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster1, S2),
        %% Verify `classy:info':
        [?assertMatch(
            #{ hello   := world
@@ -858,7 +859,9 @@ wait_site_joined(WaitOnSites, Cluster, Site) ->
             , ?snk_meta := #{node := Node}
             })
     end,
-    WaitOnSites).
+    WaitOnSites),
+  %% Account for possible race condition since the hook emitting the event is the first:
+  ct:sleep(10).
 
 wait_site_kicked(WaitOnSites, Cluster, Site) ->
   lists:foreach(
@@ -871,7 +874,9 @@ wait_site_kicked(WaitOnSites, Cluster, Site) ->
             , ?snk_meta := #{node := Node}
             })
     end,
-    WaitOnSites).
+    WaitOnSites),
+  %% Account for possible race condition since the hook emitting the event is the first:
+  ct:sleep(10).
 
 initialization_hooks(RuntimeData, Trace) ->
   #{ nodes := Nodes
