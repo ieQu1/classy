@@ -14,6 +14,14 @@ An application that helps manage a cluster of Erlang nodes.
   + `cluster`: number of known peers is >= `n_sites` configuration parameter.
   + `quorum`: number of running peers is >= `quorum` configuration parameter.
 
+# Partition tolerance
+
+Classy guarantees that all cluster members will eventually converge to the same state,
+but earlier join and leave commands *may* override later commands.
+
+These adverse side effects can be observed when conflicting commands are issued on different nodes faster than the nodes sync with each other.
+This is most likely to happen during a network partition.
+
 # Configuration
 
 `classy` is configured via OTP application environment variables and callbacks.

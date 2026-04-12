@@ -451,11 +451,11 @@ terminate(Reason, #s{cluster = Cluster, site = Site}) ->
 %%================================================================================
 
 handle_flush(S0) ->
-  %% Note: `handle_sync_in' and `local_command' functions update the Lamport clock and other states using only dirty_write for performance.
+  %% Note: for performance, `handle_sync_in' and `local_command' functions update the Lamport clock and other states using `dirty_write'.
   %% It is correct, because losing these writes due to restart doesn't lead to any visible side effects.
   %% Even if the table server restarts and loses pending writes, the restored state will be equivalent to not receiving the messages.
   %% But *here* side effects are about to happen.
-  %% As such, it is important persist the changes.
+  %% As such, it is important to persist the changes:
   ok = classy_table:flush(?ptab),
   S = handle_sync_out(S0),
   ok = classy_table:flush(?ptab),
