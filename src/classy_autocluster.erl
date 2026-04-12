@@ -51,7 +51,7 @@ enable() ->
 disable() ->
   gen_server:cast(?SERVER, #cast_enable{enable = false}).
 
-%% @doc Helper function that selects a cluster from `class:cluster_info()' according to the following rules:
+%% @doc Helper function that selects a cluster from `classy:cluster_info()' according to the following rules:
 %%
 %% <ol>
 %% <li>If there are partitioned clusters, do not join.</li>

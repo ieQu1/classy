@@ -159,7 +159,7 @@ It's recommended to use SRV records.
   apiserver    := string(),
   service_name := string(),
   app_name     => string(),
-  address_type => ip | hostname | dns
+  address_type => ip | hostname | dns,
   namespace    => string(),
   suffix       => string()
 }}
