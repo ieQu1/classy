@@ -366,8 +366,7 @@ pre_autocluster(Hook, Prio) ->
 run_level(Hook, Prio) ->
   classy_hook:insert(?on_change_run_level, Hook, Prio).
 
-%% @doc Register a hook that is executed on change of the run level of
-%% the local site.
+%% @doc Register a hook that is executed to enrich the info map returned by `info/0'.
 -spec enrich_site_info(
         fun((info()) -> info()),
         classy_hook:prio()

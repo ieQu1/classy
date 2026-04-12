@@ -249,7 +249,7 @@ etcd_v3(Action) ->
   Timeout = case Action of
               %% etcd would keep a dangling lock if we don't wait for it
               lock -> infinity;
-              %% sligthly higher than the default eetcd timeout
+              %% slightly higher than the default eetcd timeout
               _ -> 10000
             end,
   gen_server:call(?SERVER, Action, Timeout).
@@ -285,7 +285,7 @@ v3_lock(#state{prefix = Prefix, lease_id = ID}) ->
 v3_unlock(_) ->
   case persistent_term:get(classy_discovery_etcd_lock_key, undefined) of
     undefined ->
-      {error, lock_lose};
+      {error, lock_lost};
     LockKey ->
       case eetcd_lock:unlock(?MODULE, LockKey) of
         {ok, _} ->

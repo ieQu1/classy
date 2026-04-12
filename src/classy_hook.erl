@@ -71,7 +71,7 @@ insert(Hookpoint, Hook, Prio) when is_atom(Hookpoint), is_integer(Prio), is_func
   ets:insert(?tab, {Key}),
   Key.
 
-%% @doc Remove a previosuly inserted hook
+%% @doc Remove a previously inserted hook
 -spec unhook(hook()) -> ok.
 unhook(Key) ->
   ets:delete(?tab, Key),

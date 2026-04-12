@@ -191,7 +191,7 @@ delete(Tab, Key) ->
 %%
 %% Flush is atomic, meaning either all or none dirty operations are restored.
 %% However, if multiple processes perform unsynchronized dirty writes and flushes in parallel,
-%% data can be restore partially.
+%% data can be restored partially.
 -spec flush(tab()) -> ok.
 flush(Tab) ->
   gen_server:call(
@@ -199,7 +199,7 @@ flush(Tab) ->
     #call_flush{},
     ?call_timeout).
 
-%% @doc Make a checkpoint and trunkate the WAL.
+%% @doc Make a checkpoint and truncate the WAL.
 -spec force_compaction(tab()) -> ok.
 force_compaction(Tab) ->
   gen_server:call(
@@ -372,7 +372,7 @@ restore(S = #s{name = Name, ets = ETS}) ->
          , log_size = LogSize
          };
     {true, true} ->
-      %% Server was stopped while compaction was ongling:
+      %% Server was stopped while compaction was ongoing:
       ?tp(warning, ?classy_table_anomaly,
          #{ type     => aborted_compaction
           , table    => Name
