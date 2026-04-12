@@ -510,6 +510,10 @@ local_command(C, #call_set{target = Target, k = K, v = V}, S = #s{site = Local})
        , clus => S#s.cluster
        , gcl => S#s.clock
        }),
+  %% Note: here C is either `0' (when setting the default value) or `#s.c' (the last logical clock).
+  %% In the former case we don't care about losing,
+  %% and in the latter case we can't lose,
+  %% so merge result can be ignored:
   _ = merge(C, Op, S),
   need_sync(S).
 
