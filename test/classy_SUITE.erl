@@ -903,7 +903,7 @@ diagnostic(_Site, #{sites := Sites}) ->
             catch classy_test_site:call(
                     Site,
                     fun() ->
-                        #{ members => catch ets:tab2list(classy_membership)
+                        #{ members => classy_membership:dump()
                          , node => catch ets:tab2list(classy_node)
                          }
                     end);
