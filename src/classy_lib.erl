@@ -127,7 +127,8 @@ is_normal_exit(Reason) ->
     _        -> false
   end.
 
-map_deep_insert([], Val, _Acc) ->
+-spec map_deep_insert(list(), term(), map()) -> map().
+map_deep_insert([], Val, _) ->
   Val;
 map_deep_insert([K | Rest], Val, Outer) ->
   case Outer of

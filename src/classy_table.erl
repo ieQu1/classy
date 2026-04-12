@@ -146,6 +146,7 @@ stop(Tab, Timeout) ->
         {'DOWN', MRef, process, _, _} ->
           ok
       after Timeout ->
+          demonitor(MRef, [flush]),
           {error, timeout}
       end;
     undefined ->
@@ -566,7 +567,7 @@ exec_on_update(Op, #s{on_update = Fun, name = Name}) ->
            })
   end.
 
--spec do_compaction(s()) -> {ok, s()} | {error, _Reason, s()}.
+-spec do_compaction(s()) -> {ok, s()} | {error, _Reason, undefined}.
 do_compaction(S0 = #s{name = Name, ets = Ets}) ->
   S1 = #s{log = Old} = handle_flush(S0),
   ok = close_log(Old),
@@ -590,7 +591,7 @@ do_compaction(S0 = #s{name = Name, ets = Ets}) ->
            , stack => Stack
            , table => Name
            }),
-      {error, Err, S}
+      {error, Err, undefined}
   end.
 
 dump_ets(_Log, N, '$end_of_table') ->
@@ -684,8 +685,10 @@ close_log(Log) ->
   disk_log:close(Log).
 
 write_log(Log, Terms) ->
-  disk_log:log_terms(Log, Terms),
-  disk_log:sync(Log).
+  maybe
+    ok ?= disk_log:log_terms(Log, Terms),
+    disk_log:sync(Log)
+  end.
 
 read_log_chunk(Log, Cont, Size) ->
   case disk_log:chunk(Log, Cont, Size) of

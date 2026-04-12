@@ -399,7 +399,6 @@ handle_call(#call_flush{}, _From, S0) ->
   {reply, ok, S};
 handle_call(#cast_sync{} = Req, _From, S0) ->
   S = handle_sync_in(Req, S0),
-  run_hooks(S),
   {reply, ok, S};
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
@@ -413,7 +412,6 @@ handle_call(Call, From, S) ->
 %% @private
 handle_cast(#cast_sync{} = Req, S0) ->
   S = handle_sync_in(Req, S0),
-  run_hooks(S),
   {noreply, S};
 handle_cast(Cast, S) ->
   ?tp(warning, ?classy_unknown_event,
@@ -512,6 +510,10 @@ local_command(C, #call_set{target = Target, k = K, v = V}, S = #s{site = Local})
        , clus => S#s.cluster
        , gcl => S#s.clock
        }),
+  %% Note: here C is either `0' (when setting the default value) or `#s.c' (the last logical clock).
+  %% In the former case we don't care about losing,
+  %% and in the latter case we can't lose,
+  %% so merge result can be ignored:
   _ = merge(C, Op, S),
   need_sync(S).
 
