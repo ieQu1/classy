@@ -140,8 +140,11 @@
 -record(pk_hooks_ran, {c :: classy:cluster_id(), l :: classy:site()}).
 
 %% Composite table values:
--record(pv_last, {op, tou}).
--type pv_last() :: #pv_last{op :: op(), tou :: clock()}.
+-record(pv_last,
+        { op    % Last update operation
+        , toi   % Local logical time of importing the op
+        }).
+-type pv_last() :: #pv_last{op :: op(), toi :: clock()}.
 
 %%================================================================================
 %% API functions
@@ -261,9 +264,9 @@ dump() ->
                                   , val = Val
                                   , owt = OWT
                                   }
-                    , tou = TOU
+                    , toi = TOI
                     } = V,
-            Info = {Val, #{origin => Origin, ltime => Clock, wtime => OWT, ltime_imported => TOU}},
+            Info = {Val, #{origin => Origin, ltime => Clock, wtime => OWT, ltime_imported => TOI}},
             classy_lib:map_deep_insert(
               [{Cluster, Local}, peers, Target, Prop],
               Info,
@@ -638,7 +641,7 @@ sites_for_cleanup(SecsDown, S) ->
   LongGone = [I || I <- Peers, is_long_gone(MinTimeWhenKicked, I, S)],
   ActiveMembers = Peers -- LongGone,
   MinAcked = min_acked(ActiveMembers, S),
-  [I || I <- LongGone, max_tou(I, S) =< MinAcked].
+  [I || I <- LongGone, max_toi(I, S) =< MinAcked].
 
 forget_site(Site, #s{cluster = Cluster, site = Local}) when is_binary(Site) ->
   classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, r = Site, k = ?mem}),
@@ -657,7 +660,7 @@ set_last(LTime, Op, #s{cluster = Cluster, site = Local}) ->
   classy_table:dirty_write(
     ?ptab,
     #pk_last{c = Cluster, l = Local, r = Target, k = K},
-    #pv_last{op = Op, tou = LTime}).
+    #pv_last{op = Op, toi = LTime}).
 
 -spec memtab_lookup(classy:site(), site_prop(), #s{}) -> {ok, op()} | undefined.
 memtab_lookup(Site, K, #s{cluster = Cluster, site = Local}) ->
@@ -671,7 +674,7 @@ memtab_lookup(Site, K, #s{cluster = Cluster, site = Local}) ->
 -spec memtab_since(clock(), #s{}) -> [op()].
 memtab_since(Since, #s{cluster = Cluster, site = Local}) ->
   MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, _ = '_'}
-                   , v = #pv_last{op = '$1', tou = '$2', _ = '_'}
+                   , v = #pv_last{op = '$1', toi = '$2', _ = '_'}
                    , _ = '_'
                    }
        , [{'>=', '$2', Since}]
@@ -736,11 +739,11 @@ is_long_gone(MinTimeWhenKicked, Site, S) ->
       false
   end.
 
-%% @doc Return maximum `tou' for any property of the site.
--spec max_tou(classy:site(), #s{}) -> clock() | undefined.
-max_tou(Site, #s{cluster = Cluster, site = Local}) ->
+%% @doc Return maximum `toi' for any property of the site.
+-spec max_toi(classy:site(), #s{}) -> clock() | undefined.
+max_toi(Site, #s{cluster = Cluster, site = Local}) ->
   MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = Site, _ = '_'}
-                   , v = #pv_last{tou = '$1', _ = '_'}
+                   , v = #pv_last{toi = '$1', _ = '_'}
                    , _ = '_'
                    }
        , []
