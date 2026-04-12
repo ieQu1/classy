@@ -399,7 +399,6 @@ handle_call(#call_flush{}, _From, S0) ->
   {reply, ok, S};
 handle_call(#cast_sync{} = Req, _From, S0) ->
   S = handle_sync_in(Req, S0),
-  run_hooks(S),
   {reply, ok, S};
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
@@ -413,7 +412,6 @@ handle_call(Call, From, S) ->
 %% @private
 handle_cast(#cast_sync{} = Req, S0) ->
   S = handle_sync_in(Req, S0),
-  run_hooks(S),
   {noreply, S};
 handle_cast(Cast, S) ->
   ?tp(warning, ?classy_unknown_event,
