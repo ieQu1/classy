@@ -2,8 +2,7 @@
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 
-%% @doc A helper module for implementing property based tests on
-%% classy clusters.
+%% @doc A helper module for implementing property-based tests on classy clusters.
 -module(classy_test_fuzzer).
 
 %% API:
@@ -69,6 +68,7 @@
          , running := boolean()
          , conf := classy_test_site:conf()
          , in_sync := boolean()
+         , cluster_view := [classy:site()]
          }.
 
 -type s() ::
@@ -321,10 +321,11 @@ next_state(_, _Ret, {call, ?MODULE, init_cluster, [TestConf]}) ->
     lists:mapfoldl(
       fun({Site, Conf}, Acc) ->
           Elem = { Site
-                 , #{ cluster => Acc
-                    , running => false
-                    , conf    => Conf
-                    , in_sync => true
+                 , #{ cluster      => Acc
+                    , running      => false
+                    , conf         => Conf
+                    , in_sync      => true
+                    , cluster_view => [Site]
                     }
                  },
           {Elem, Acc + 1}

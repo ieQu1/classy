@@ -37,22 +37,18 @@
 %%--------------------------------------------------------------------
 
 discover(Options) ->
-  Defaults = #{ app_name     => undefined
+  Defaults = #{ app_name     => classy_autocluster:app_name()
               , address_type => ip
               , namespace    => "default"
               , suffix       => ""
               },
   #{ apiserver    := Server
    , service_name := Service
-   , app_name     := App0
+   , app_name     := App
    , address_type := AddrType
    , namespace    := Namespace
    , suffix       := Suffix
    } = maps:merge(Defaults, Options),
-  App = case App0 of
-          undefined -> classy_autocluster:app_name();
-          _         -> App0
-        end,
   case k8s_service_get(Server, Service, Namespace) of
     {ok, Response} ->
       Addresses = extract_addresses(AddrType, Response),

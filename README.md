@@ -118,7 +118,7 @@ Peer discovery method.
 
 ### Manual
 
-`{manual, _}`
+`{manual, #{}}`
 
 Disable automatic cluster discovery.
 This is the default strategy.
@@ -156,19 +156,29 @@ It's recommended to use SRV records.
 
 ```erlang
 {k8s, #{
-  namespace := string(),
-  app       := string(),
-  port      := pos_integer()
+  apiserver    := string(),
+  service_name := string(),
+  app_name     => string(),
+  address_type => ip | hostname | dns
+  namespace    => string(),
+  suffix       => string()
 }}
 ```
 
-Discover peers via Kubernetes service discovery.
+The **K8S discovery strategy** enables cluster nodes to discover each other by querying the Kubernetes API server.
+It queries the Kubernetes API endpoint `/api/v1/namespaces/{namespace}/endpoints/{app}` to retrieve the IP addresses or hostnames of all pods associated with that service,
+which are then converted into Erlang node names.
 
-- `namespace`: Kubernetes namespace to search for services
-- `app`: Kubernetes application name (service name prefix)
-- `port`: Erlang distribution port number to use for node connections
+Configuration Parameters:
 
-This strategy queries the Kubernetes API at `/api/v1/namespaces/{namespace}/endpoints/{app}` to discover peer nodes.
+| Parameter      | Type   | Default                    | Description                                                                                          |
+|:---------------|:-------|:---------------------------|:-----------------------------------------------------------------------------------------------------|
+| `apiserver`    | String | *(Required)*               | The URL of the Kubernetes API server.                                                                |
+| `service_name` | String | *(Required)*               | The name of the Kubernetes Service used for discovery.                                               |
+| `app_name`     | String | Prefix of the current node | The application name used as a prefix for the generated node names.                                  |
+| `address_type` | Atom   | `ip`                       | Determines the address extraction and node naming format. Supported values: `ip`, `hostname`, `dns`. |
+| `namespace`    | String | `"default"`                | The Kubernetes namespace where the service is located.                                               |
+| `suffix`       | String | `""`                       | An optional DNS suffix appended to the node name.                                                    |
 
 ### etcd
 

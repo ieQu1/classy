@@ -19,6 +19,7 @@
         , sites/0
         , nodes/1
         , quorum/1
+        , fault_tolerance/1
         , at_lower_level/2
         ]).
 
@@ -50,6 +51,10 @@
 
 -include("classy_internal.hrl").
 -compile({no_auto_import, [nodes/1]}).
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
 
 %%================================================================================
 %% Type declarations
@@ -92,7 +97,7 @@
                      | autoclean  %% Intent set by the system when the site is kicked by autoclean
                      | _.
 
--type run_level() :: stopped | single | cluster.
+-type run_level() :: stopped | single | cluster | quorum.
 
 %%================================================================================
 %% API functions
@@ -218,13 +223,17 @@ at_lower_level(RunLevel, Fun) ->
 %% </itemize>
 -spec quorum(config | running | non_neg_integer()) -> pos_integer().
 quorum(N) when is_integer(N), N >= 0 ->
-  trunc(N / 2) + 1;
+  N div 2 + 1;
 quorum(config) ->
   max(1, application:get_env(classy, quorum, 1));
 quorum(running) ->
   max(
     quorum(length(nodes(running))),
     quorum(config)).
+
+%% @doc Calculate how many nodes can be down, while cluster still maintains quorum.
+fault_tolerance(N) ->
+  N - quorum(N).
 
 %%--------------------------------------------------------------------------------
 %% Hooks
@@ -373,3 +382,30 @@ enrich_site_info(Hook, Prio) ->
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+%%================================================================================
+%% Unit tests
+%%================================================================================
+
+
+-ifdef(TEST).
+
+quorum_test() ->
+  ?assertEqual(1, quorum(1)),
+  ?assertEqual(2, quorum(2)),
+  ?assertEqual(2, quorum(3)),
+  ?assertEqual(3, quorum(4)),
+  ?assertEqual(3, quorum(5)),
+  ?assertEqual(4, quorum(6)),
+  ?assertEqual(4, quorum(7)).
+
+fault_tolerance_test() ->
+  ?assertEqual(0, fault_tolerance(1)),
+  ?assertEqual(0, fault_tolerance(2)),
+  ?assertEqual(1, fault_tolerance(3)),
+  ?assertEqual(1, fault_tolerance(4)),
+  ?assertEqual(2, fault_tolerance(5)),
+  ?assertEqual(2, fault_tolerance(6)),
+  ?assertEqual(3, fault_tolerance(7)).
+
+-endif.

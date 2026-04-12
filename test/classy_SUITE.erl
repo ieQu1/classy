@@ -481,13 +481,6 @@ t_100_autocluster(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
-t_900_fuzz_bug(_Config) ->
-  ?check_trace(
-     begin
-       ok
-     end,
-     []).
-
 t_999_fuzz(_Config) ->
   %% NOTE: we set timeout at the lowest level to capture the trace
   %% and have a nicer error message.
