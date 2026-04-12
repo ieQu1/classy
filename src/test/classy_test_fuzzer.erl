@@ -380,6 +380,21 @@ precondition(S, {call, ?MODULE, join_node, [Local, Target|_]}) ->
   is_running(Target, S) andalso
   in_sync(Target, S) andalso
   Local =/= Target;
+precondition(S, {call, classy_test_site, stop, [Site]}) ->
+  %% We avoid stopping all sites in clusters that have >1 sites for simplicity.
+  %% Stopping all sites at once leads to loss of synchronization and split views.
+  %% Verifying such scenarios requires a more sophisticated model than we have now.
+  Peers = sites_of_cluster(cluster_of(Site, S), S),
+  case Peers of
+    [_] ->
+      %% Singleton clusters don't have this problem:
+      true;
+    _ ->
+      case [I || I <- Peers -- [Site], is_running(I, S)] of
+        [] -> false;
+        _  -> true
+      end
+  end;
 precondition(S, Call) ->
   optcall(S, precondition, [S, Call], true).
 
