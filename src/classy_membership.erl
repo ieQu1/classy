@@ -20,6 +20,7 @@
         , flush/2
         , node_of_site/2
         , site_of_node/2
+        , dump/0
         ]).
 
 %% behavior callbacks:
@@ -82,6 +83,7 @@
                , owt :: integer()        %% Origin's wall time when the update was made. This value
                                          %% isn't used by this module directly, but it gives hints to
                                          %% the autoclean
+               , reserved :: term()
                }.
 
 %% Projection of `op()` fields used to establish total order of logs.
@@ -138,8 +140,11 @@
 -record(pk_hooks_ran, {c :: classy:cluster_id(), l :: classy:site()}).
 
 %% Composite table values:
--record(pv_last, {op, tou}).
--type pv_last() :: #pv_last{op :: op(), tou :: clock()}.
+-record(pv_last,
+        { op    % Last update operation
+        , toi   % Local logical time of importing the op
+        }).
+-type pv_last() :: #pv_last{op :: op(), toi :: clock()}.
 
 %%================================================================================
 %% API functions
@@ -244,6 +249,52 @@ flush(Cluster, Local) ->
     ?via(Cluster, Local),
     #call_flush{},
     ?call_timeout).
+
+%% @doc Format full state of the membership CRDT in human-readable form for tests and debugging.
+-spec dump() -> #{{classy:cluster_id(), classy:site()} => map()}.
+dump() ->
+  ets:foldl(
+    fun(#classy_kv{k = K, v = V}, Acc) ->
+        case K of
+          #pk_last{c = Cluster, l = Local} ->
+            #pv_last{ op = #op_set{ origin = Origin
+                                  , target = Target
+                                  , k = Prop
+                                  , c = Clock
+                                  , val = Val
+                                  , owt = OWT
+                                  }
+                    , toi = TOI
+                    } = V,
+            Info = {Val, #{origin => Origin, ltime => Clock, wtime => OWT, ltime_imported => TOI}},
+            classy_lib:map_deep_insert(
+              [{Cluster, Local}, peers, Target, Prop],
+              Info,
+              Acc);
+          #pk_acked_out{c = Cluster, l = Local, r = Remote} ->
+            classy_lib:map_deep_insert(
+              [{Cluster, Local}, acked_out, Remote],
+              V,
+              Acc);
+          #pk_acked_in{c = Cluster, l = Local, r = Remote} ->
+            classy_lib:map_deep_insert(
+              [{Cluster, Local}, acked_in, Remote],
+              V,
+              Acc);
+          #pk_clock{c = Cluster, s = Local} ->
+            classy_lib:map_deep_insert(
+              [{Cluster, Local}, clock],
+              V,
+              Acc);
+          #pk_hooks_ran{c = Cluster, l = Local} ->
+            classy_lib:map_deep_insert(
+              [{Cluster, Local}, hook_ran],
+              V,
+              Acc)
+        end
+    end,
+    #{},
+    ?ptab).
 
 -ifdef(TEST).
 
@@ -586,55 +637,18 @@ handle_cleanup(ForgetAfter, S) ->
 -spec sites_for_cleanup(integer(), #s{}) -> [classy:site()].
 sites_for_cleanup(SecsDown, S) ->
   MinTimeWhenKicked = classy_lib:time_s() - SecsDown,
-  MinUnacked = min_unacked(MinTimeWhenKicked, S),
-  SitesWithoutRecentUpdates = peers(S) -- recently_updated(MinUnacked, S),
-  lists:filter(
-    fun(Peer) ->
-        is_long_gone(MinTimeWhenKicked, Peer, S)
-    end,
-    SitesWithoutRecentUpdates).
+  Peers = peers(S),
+  LongGone = [I || I <- Peers, is_long_gone(MinTimeWhenKicked, I, S)],
+  ActiveMembers = Peers -- LongGone,
+  MinAcked = min_acked(ActiveMembers, S),
+  [I || I <- LongGone, max_toi(I, S) =< MinAcked].
 
 forget_site(Site, #s{cluster = Cluster, site = Local}) when is_binary(Site) ->
-  MSLast = #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = Site, _ = '_'}
-                     , _ = '_'
-                     },
-  ets:match_delete(?ptab, MSLast),
-  ets:delete(?ptab, #pk_acked_in{c = Cluster, l = Local, r = Site}),
-  ets:delete(?ptab, #pk_acked_out{c = Cluster, l = Local, r = Site}),
+  classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, r = Site, k = ?mem}),
+  classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, r = Site, k = ?host}),
+  classy_table:dirty_delete(?ptab, #pk_acked_in{c = Cluster, l = Local, r = Site}),
+  classy_table:dirty_delete(?ptab, #pk_acked_out{c = Cluster, l = Local, r = Site}),
   ok.
-
--spec min_unacked(pos_integer(), #s{}) -> clock() | undefined.
-min_unacked(MinTimeWhenKicked, S) ->
-  lists:foldl(
-    fun(Peer, Acc) ->
-        case is_long_gone(MinTimeWhenKicked, Peer, S) of
-          true ->
-            Acc;
-          false ->
-            min(get_acked_out(Peer, S), Acc)
-        end
-    end,
-    hooks_ran(S),
-    peers(S)).
-
--spec is_long_gone(pos_integer(), classy:site(), #s{}) -> boolean().
-is_long_gone(MinTimeWhenKicked, Site, S) ->
-  case memtab_lookup(Site, ?mem, S) of
-    {ok, #op_set{val = false, owt = TimeWhenKicked}} when
-        TimeWhenKicked < MinTimeWhenKicked ->
-      true;
-    _ ->
-      false
-  end.
-
-%% @doc Return list of sites that have `tou' greater then `MinTou' for
-%% any property
--spec recently_updated(clock(), #s{}) -> [classy:site()].
-recently_updated(MinTou, S) ->
-  lists:usort(
-    lists:map(
-      fun(#op_set{target = T}) -> T end,
-      memtab_since(MinTou, S))).
 
 %%--------------------------------------------------------------------------------
 %% Interface for site state storage
@@ -646,7 +660,7 @@ set_last(LTime, Op, #s{cluster = Cluster, site = Local}) ->
   classy_table:dirty_write(
     ?ptab,
     #pk_last{c = Cluster, l = Local, r = Target, k = K},
-    #pv_last{op = Op, tou = LTime}).
+    #pv_last{op = Op, toi = LTime}).
 
 -spec memtab_lookup(classy:site(), site_prop(), #s{}) -> {ok, op()} | undefined.
 memtab_lookup(Site, K, #s{cluster = Cluster, site = Local}) ->
@@ -660,7 +674,7 @@ memtab_lookup(Site, K, #s{cluster = Cluster, site = Local}) ->
 -spec memtab_since(clock(), #s{}) -> [op()].
 memtab_since(Since, #s{cluster = Cluster, site = Local}) ->
   MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, _ = '_'}
-                   , v = #pv_last{op = '$1', tou = '$2', _ = '_'}
+                   , v = #pv_last{op = '$1', toi = '$2', _ = '_'}
                    , _ = '_'
                    }
        , [{'>=', '$2', Since}]
@@ -691,6 +705,55 @@ select_nodes(Cluster, Local, Action) ->
        , [Action]
        },
   ets:select(?ptab, [MS]).
+
+
+%% @private Find minimal Lamport clock, such that:
+%%
+%% <ul>
+%% <li>
+%% All hooks for the events preceding it are executed locally.
+%% </li>
+%% <li>
+%% All sites from the list have acked it.
+%% </li>
+%% </ul>
+-spec min_acked([classy:site()], #s{}) -> clock() | undefined.
+min_acked(Sites, S = #s{site = Local}) ->
+  lists:foldl(
+    fun(Peer, Acc) ->
+        case Peer of
+          Local -> hooks_ran(S);
+          _     -> min(get_acked_out(Peer, S), Acc)
+        end
+    end,
+    undefined,
+    Sites).
+
+-spec is_long_gone(pos_integer(), classy:site(), #s{}) -> boolean().
+is_long_gone(MinTimeWhenKicked, Site, S) ->
+  case memtab_lookup(Site, ?mem, S) of
+    {ok, #op_set{val = false, owt = TimeWhenKicked}} when
+        TimeWhenKicked < MinTimeWhenKicked ->
+      true;
+    _ ->
+      false
+  end.
+
+%% @doc Return maximum `toi' for any property of the site.
+-spec max_toi(classy:site(), #s{}) -> clock() | undefined.
+max_toi(Site, #s{cluster = Cluster, site = Local}) ->
+  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = Site, _ = '_'}
+                   , v = #pv_last{toi = '$1', _ = '_'}
+                   , _ = '_'
+                   }
+       , []
+       , ['$1']
+       },
+  L = ets:select(?ptab, [MS]),
+  case L of
+    [] -> undefined;
+    _  -> lists:max(L)
+  end.
 
 %%--------------------------------------------------------------------------------
 %% Logical clocks

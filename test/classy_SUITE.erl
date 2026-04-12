@@ -330,8 +330,9 @@ t_070_cleanup(_Config) ->
   Sites = [S1, S2, S3],
   AppConf = {classy_test_app,
              #{ app => classy
-              , env => #{ quorum => 2
+              , env => #{ quorum            => 2
                         , max_site_downtime => 1
+                        , forget_after      => 0
                         }
               }},
   Conf = #{fixtures => [AppConf]},
@@ -364,6 +365,63 @@ t_070_cleanup(_Config) ->
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
+
+%% This testcase verifies membership cleanup.
+t_071_membership_forget(_Config) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  S4 = <<"s4">>,
+  ForgetAfterS = 1,
+  WaitForget = ForgetAfterS * 1000 + 10,
+  AppConf = {classy_test_app,
+             #{ app => classy
+              , env => #{forget_after => ForgetAfterS}
+              }},
+  Conf = #{fixtures => [AppConf]},
+  ?check_trace(
+     #{timetrap => 30_000},
+     begin
+       %% Prepare the system:
+       N1 = create_start_site(S1, Conf),
+       _N2 = create_start_site(S2, Conf),
+       _N3 = create_start_site(S3, Conf),
+       _N4 = create_start_site(S4, Conf),
+       [ok = ?ON(I, classy:join_node(N1, join)) || I <- [S2, S3, S4]],
+       #{cluster := Cluster} = ?ON(S1, classy_node:hello()),
+       %% Stop S3. Its absence should prevent cleanup from doing anything.
+       classy_test_site:stop(S3),
+       %% Kick S2, pass time and trigger cleanup at S1:
+       ?ON(S1, classy:kick_site(S2, kick)),
+       ct:sleep(WaitForget),
+       ?ON(S1, classy_membership:cleanup(Cluster, S1, ForgetAfterS)),
+       %% It should remain in the cluster for now, as S3 is out-of-sync:
+       [?assertMatch(
+           #{{Cluster, I} := #{peers := #{S1 := _, S2 := _, S3 := _, S3 := _}}},
+           ?ON(I, classy_membership:dump()),
+           #{at => I})
+        || I <- [S1, S4]],
+       %% Kick S3 (while it's stopped and out of sync):
+       ?ON(S1, classy:kick_site(S3, kick)),
+       wait_site_kicked([S1, S4], Cluster, S3),
+       %% After S3 expires, S1 should have no problem deleting both S2 and S3:
+       ct:sleep(WaitForget * 3),
+       ?ON(S1, classy_membership:cleanup(Cluster, S1, ForgetAfterS)),
+       #{{Cluster, S1} := S1Info = #{peers := PeersOfS1}} = ?ON(S1, classy_membership:dump()),
+       ?assertMatch(
+          #{peers := #{S1 := _, S4 := _}},
+          S1Info),
+       ?assertNot(
+          maps:is_key(S2, PeersOfS1),
+          S1Info),
+       ?assertNot(
+          maps:is_key(S3, PeersOfS1),
+          S1Info)
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
 
 %% This testcase verifies that sites that membership CRDT recovers
 %% from lost packets. Packet loss is emulated by setting "acked_out"
