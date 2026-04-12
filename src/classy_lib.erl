@@ -21,6 +21,8 @@
         , sync_stop_proc/3
         , ensure_list/1
         , is_normal_exit/1
+
+        , map_deep_insert/3
         ]).
 
 -export_type([unix_time_s/0, wakeup_timer/0]).
@@ -123,6 +125,16 @@ is_normal_exit(Reason) ->
     normal   -> true;
     shutdown -> true;
     _        -> false
+  end.
+
+map_deep_insert([], Val, _Acc) ->
+  Val;
+map_deep_insert([K | Rest], Val, Outer) ->
+  case Outer of
+    #{K := Inner} ->
+      Outer#{K := map_deep_insert(Rest, Val, Inner)};
+    #{} ->
+      Outer#{K => map_deep_insert(Rest, Val, #{})}
   end.
 
 %%================================================================================
