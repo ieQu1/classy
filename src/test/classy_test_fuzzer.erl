@@ -173,8 +173,8 @@ start_site(Site, S) ->
   %% Note: since in non-singleton clusters we don't stop all sites,
   %% we can wait for a sync-in event to make sure the re-started site is synced:
   NEvents = case sites_of_cluster(cluster_of(Site, S), S) of
-              [_] -> 1;
-              _   -> 2
+              [_] -> 2;
+              _   -> 3
             end,
   {ok, Sub} = snabbkaffe:subscribe(
                 fun(#{ ?snk_kind := classy_change_run_level
@@ -182,10 +182,10 @@ start_site(Site, S) ->
                      , ?snk_meta := #{local := Site}
                      }) ->
                     true;
-                   (#{ ?snk_kind := classy_membership_sync_in
+                   (#{ ?snk_kind := K
                      , ?snk_meta := #{local := Site}
                      }) ->
-                    true;
+                    K =:= classy_membership_sync_out orelse K =:= classy_membership_sync_in;
                    (_) ->
                     false
                 end,

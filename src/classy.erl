@@ -288,7 +288,7 @@ on_membership_change(Hook, Prio) ->
 pre_join(Hook, Prio) ->
   classy_hook:insert(?on_pre_join, Hook, Prio).
 
-%% @doc Register a hook that is executed after a local site joins a
+%% @doc Register a hook that is executed after the local site joins a
 %% cluster.
 -spec post_join(
         fun((cluster_id(), Local, JoinedTo) -> _),
@@ -312,7 +312,7 @@ post_join(Hook, Prio) ->
 pre_kick(Hook, Prio) ->
   classy_hook:insert(?on_pre_kick, Hook, Prio).
 
-%% @doc Register a hook that is executed after a local site leaves a
+%% @doc Register a hook that is executed after the local site leaves a
 %% cluster. This hook can perform destructive actions associated with
 %% cleanup.
 -spec post_kick(
@@ -366,7 +366,7 @@ pre_autocluster(Hook, Prio) ->
 run_level(Hook, Prio) ->
   classy_hook:insert(?on_change_run_level, Hook, Prio).
 
-%% @doc Register a hook that is executed to enrich the info map returned by `info/0'.
+%% @doc Register a hook that can add entries to the map returned by `info/0'.
 -spec enrich_site_info(
         fun((info()) -> info()),
         classy_hook:prio()

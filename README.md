@@ -3,6 +3,28 @@ classy
 
 An application that helps manage a cluster of Erlang nodes.
 
+# Features
+
+- **Cluster management**:
+  sites can join together to form clusters or be removed from the cluster.
+  Peer information is propagated using gossip protocol.
+- **Persistent node identities**:
+  nodes are assigned persistent identities that survive host name changes.
+- **Service discovery**:
+  sites can automatically discover peers using one of cluster discovery strategies:
+  + **static**: connect to one of pre-configured nodes
+  + **dns**: discover peers via `A`, `AAAA` or `SRV` record
+  + **k8s**: discover peers via Kubernetes API
+  + **etcd**: query [ETCD](https://etcd.io/)
+- **Automatic clean up**:
+  sites that remain down for a long time are automatically removed.
+- **Persistence layer**:
+  classy implements a standalone persistent table similar to mnesia `local_content` `disk_copies` table,
+  that can be used by 3rd party applications.
+- **Test helpers**:
+  classy implements a wrapper for [peer](https://www.erlang.org/doc/apps/stdlib/peer.html) to simplify testing of distributed applications.
+  It also provides a standard property-based test helper for testing application code with regard to cluster changes.
+
 # Concepts
 
 - Site ID: a random unique identifier of the node that persists between restarts and host name changes.
@@ -13,6 +35,15 @@ An application that helps manage a cluster of Erlang nodes.
   + `single`: classy application is running and exchanging membership information
   + `cluster`: number of known peers is >= `n_sites` configuration parameter.
   + `quorum`: number of running peers is >= `quorum` configuration parameter.
+
+
+# Partition tolerance
+
+Classy guarantees that all cluster members will eventually converge to the same state,
+but earlier join and leave commands *may* override later commands.
+
+These adverse side effects can be observed when conflicting commands are issued on different nodes faster than the nodes sync with each other.
+This is most likely to happen during a network partition.
 
 # Configuration
 
