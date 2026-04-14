@@ -626,19 +626,19 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
   ?assertSameSet(
      ExpectedSites,
      classy_test_site:call(Site, classy, sites, []),
-     #{ on => Site
-      , msg => "View of the cluster"
-      , diagnostic => diagnostic(Site, S)
-      , model_state => S
+     #{ on            => Site
+      , msg           => "View of the cluster"
+      , '~diagnostic' => classy_test_fuzzer:diagnostic(S)
+      , model_state   => S
       }),
   %% Verify list of all nodes:
   ?assertSameSet(
      [fuzz_node_name(I) || I <- ExpectedSites],
      classy_test_site:call(Site, classy, nodes, [all]),
-     #{ on  => Site
-      , msg => "View of all nodes"
-      , diagnostic => diagnostic(Site, S)
-      , model_state => S
+     #{ on            => Site
+      , msg           => "View of all nodes"
+      , '~diagnostic' => classy_test_fuzzer:diagnostic(S)
+      , model_state   => S
       }),
   %% Check running nodes:
   ?assertSameSet(
@@ -646,10 +646,10 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
       || I <- ExpectedSites,
          classy_test_fuzzer:is_running(I, S)],
      classy_test_site:call(Site, classy, nodes, [running]),
-     #{ on  => Site
-      , msg => "View of running nodes"
-      , diagnostic => diagnostic(Site, S)
-      , model_state => S
+     #{ on            => Site
+      , msg           => "View of running nodes"
+      , '~diagnostic' => classy_test_fuzzer:diagnostic(S)
+      , model_state   => S
       }),
   ok.
 
@@ -899,24 +899,6 @@ setup_hooks(Site) ->
         classy_node:maybe_init_the_site(Site)
     end,
     0).
-
-diagnostic(_Site, #{sites := Sites}) ->
-  maps:map(
-    fun(Site, #{running := R}) ->
-        case R of
-          true ->
-            catch classy_test_site:call(
-                    Site,
-                    fun() ->
-                        #{ members => classy_membership:dump()
-                         , node => catch ets:tab2list(classy_node)
-                         }
-                    end);
-          false ->
-            stopped
-        end
-    end,
-    Sites).
 
 -spec proper_printout(string(), list()) -> _.
 proper_printout(Char, []) when Char =:= ".";

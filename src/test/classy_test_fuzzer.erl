@@ -13,7 +13,11 @@
         , sites_of_cluster/2
         , trace_and_run/1
         , wrap_commands/1
+        , cluster_of/2
         , real_cluster_of/1
+        , clusters/1
+        , diagnostic/1
+        , diagnostic/2
         ]).
 
 %% behavior callbacks:
@@ -54,6 +58,9 @@
 %% Type declarations
 %%================================================================================
 
+%% "Symbolic" id of the cluster
+-type cluster() :: integer().
+
 -type test_conf() ::
         #{ module := module()
          , sites => [{classy:site(), classy_test_site:conf()}]
@@ -63,8 +70,8 @@
          }.
 
 -type site_state() ::
-        #{ %% Current cluster ID of the site:
-           cluster := classy:cluster_id() | undefined
+        #{ %% Current symbolic cluster ID of the site:
+           cluster := cluster()
          , running := boolean()
          , conf := classy_test_site:conf()
          }.
@@ -179,12 +186,12 @@ start_site(Site, S) ->
   {ok, Sub} = snabbkaffe:subscribe(
                 fun(#{ ?snk_kind := classy_change_run_level
                      , to := single
-                     , ?snk_meta := #{local := Site}
+                     , ?snk_meta := #{local := X}
                      }) ->
-                    true;
+                    X =:= Site;
                    (#{ ?snk_kind := K
-                     , ?snk_meta := #{local := Site}
-                     }) ->
+                     , ?snk_meta := #{local := X}
+                     }) when X =:= Site ->
                     K =:= classy_membership_sync_out orelse K =:= classy_membership_sync_in;
                    (_) ->
                     false
@@ -232,10 +239,12 @@ cmds(NCommandsFactor, InitState) ->
       ?MODULE,
       initial_state(InitState))).
 
+-spec is_running(classy:site(), s()) -> boolean().
 is_running(Site, #{sites := Sites}) ->
   #{Site := #{running := Running}} = Sites,
   Running.
 
+-spec running_sites(s()) -> [classy:site()].
 running_sites(#{sites := Sites}) ->
   maps:fold(
     fun(Site, #{running := Running}, Acc) ->
@@ -247,6 +256,7 @@ running_sites(#{sites := Sites}) ->
     [],
     Sites).
 
+-spec sites_of_cluster(cluster(), s()) -> [classy:site()].
 sites_of_cluster(Cluster, #{sites := Sites}) ->
   maps:fold(
     fun(Site, #{cluster := C}, Acc) ->
@@ -257,6 +267,7 @@ sites_of_cluster(Cluster, #{sites := Sites}) ->
     [],
     Sites).
 
+-spec real_cluster_of(classy:site()) -> classy:cluster_id().
 real_cluster_of(Site) ->
   ?retry(
      100,
@@ -270,10 +281,47 @@ real_cluster_of(Site) ->
        Cluster
      end).
 
+-spec cluster_of(classy:site(), s()) -> cluster().
+cluster_of(Site, #{sites := Sites}) ->
+  #{Site := #{cluster := C}} = Sites,
+  C.
+
+-spec clusters(s()) -> #{cluster() => [classy:site()]}.
+clusters(#{sites := Sites}) ->
+  maps:groups_from_list(
+    fun({C, _}) -> C end,
+    fun({_, S}) -> S end,
+    [{C, S} || S := #{cluster := C} <- Sites]).
+
+%% @doc Dump state of classy processes on the given sites.
+-spec diagnostic(s()) -> #{classy:site() => _}.
+diagnostic(#{sites := Sites} = S) ->
+  diagnostic(maps:keys(Sites), S).
+
+-spec diagnostic([classy:site()], s()) -> #{classy:site() => _}.
+diagnostic(SelectedSites, #{sites := Sites}) ->
+  maps:map(
+    fun(Site, #{running := R}) ->
+        case R of
+          true ->
+            catch classy_test_site:call(
+                    Site,
+                    fun() ->
+                        #{ members => classy_membership:dump()
+                         , node => catch ets:tab2list(classy_node)
+                         }
+                    end);
+          false ->
+            stopped
+        end
+    end,
+    maps:with(SelectedSites, Sites)).
+
 %%================================================================================
 %% Proper generators
 %%================================================================================
 
+%% @private
 enrich_test_conf_(Conf = #{module := _, sites := Sites}) ->
   ?LET(
      { Quorum
@@ -286,6 +334,7 @@ enrich_test_conf_(Conf = #{module := _, sites := Sites}) ->
           , n_sites => NSites
           }).
 
+%% @private
 running_site_command_(Site, S = #{sites := Sites}) ->
   #{Site := #{cluster := Cluster}} = Sites,
   OtherMembers = sites_of_cluster(Cluster, S) -- [Site],
@@ -297,12 +346,14 @@ running_site_command_(Site, S = #{sites := Sites}) ->
     | optcall(S, running_site_command, [Site, S], [])
     ]).
 
+%% @private
 stopped_site_command_(Site, S) ->
   frequency(
     [ {10, {call, ?MODULE, start_site, [Site, S]}}
     | optcall(S, stopped_site_command, [Site, S], [])
     ]).
 
+%% @private
 site_command_(Site, S) ->
   case is_running(Site, S) of
     true  -> running_site_command_(Site, S);
@@ -313,6 +364,7 @@ site_command_(Site, S) ->
 %% behavior callbacks
 %%================================================================================
 
+%% @private
 command({init, Conf0}) ->
   ?LET(Conf,
        enrich_test_conf_(Conf0),
@@ -322,11 +374,12 @@ command(S = #{sites := Sites}) ->
   CustomCmds = optcall(S, general_commands, [S], []),
   frequency(CustomCmds ++ SiteCmds).
 
+%% @private
 -spec initial_state(test_conf()) -> {init, test_conf()}.
 initial_state(Conf) ->
   {init, Conf}.
 
-%% Initial connection:
+%% @private
 next_state(S, Ret, {call, ?MODULE, trace_and_run, [{M, F, A}]}) ->
   next_state(S, Ret, {call, M, F, A});
 next_state(_, _Ret, {call, ?MODULE, init_cluster, [TestConf]}) ->
@@ -370,14 +423,14 @@ next_state(S, _Ret, {call, ?MODULE, kick_site, [_Origin, Target | _]}) ->
   #{cluster_id := NextClusterId} = S,
   update_site(
     Target,
-    fun(SiteS = #{running := Running}) ->
-        %% If site is kicked while stopped, we mark it as out-of-sync:
+    fun(SiteS) ->
         SiteS#{cluster := NextClusterId}
     end,
     S#{cluster_id := NextClusterId + 1});
 next_state(S = #{module := Mod}, Ret, Command) ->
   Mod:next_state(S, Ret, Command).
 
+%% @private
 precondition(S, {call, ?MODULE, trace_and_run, [{M, F, A}]}) ->
   precondition(S, {call, M, F, A});
 precondition({init, _}, {call, ?MODULE, init_cluster, _}) ->
@@ -410,6 +463,7 @@ precondition(S, {call, classy_test_site, stop, [Site]}) ->
 precondition(S, Call) ->
   optcall(S, precondition, [S, Call], true).
 
+%% @private
 postcondition(S, {call, ?MODULE, trace_and_run, [{M, F, A}]}, Result) ->
   postcondition(S, {call, M, F, A}, Result);
 postcondition(PrevState, Call, Result) ->
@@ -442,15 +496,49 @@ postcondition(PrevState, Call, Result) ->
     _ ->
       ok
   end,
+  %% TODO: Ideally, system should be synchronized by waiting for
+  %% events, but having this polling postcondition here helps to
+  %% stabilize the tests.
+  wait_clusters_converge(CurrentState),
+  %% Call user's postcondition:
   optcall(CurrentState, postcondition, [CurrentState, Call, Result], true).
 
 %%================================================================================
 %% Internal functions
 %%================================================================================
 
-cluster_of(Site, #{sites := Sites}) ->
-  #{Site := #{cluster := C}} = Sites,
-  C.
+wait_clusters_converge(S) ->
+  ?retry(100, 100,
+         maps:foreach(
+           fun(Cluster, Sites) ->
+               verify_cluster_converged(Cluster, Sites, S)
+           end,
+           classy_test_fuzzer:clusters(S))).
+
+verify_cluster_converged(Cluster, Sites, S) ->
+  %% Verify that all running sites in the cluster have the same view of the cluster:
+  Running = [I || I <- Sites, classy_test_fuzzer:is_running(I, S)],
+  Views = [{ I
+           , classy_test_site:call(I, classy, sites, [])
+           }
+           || I <- Running],
+  case Views of
+    [] ->
+      ok;
+    [{_, Fst} | Rest] ->
+      lists:foreach(
+        fun({_Site, View}) ->
+            ?assertEqual(
+               lists:sort(Fst),
+               lists:sort(View),
+               #{ msg           => inconsistent_cluster
+                , cluster       => Cluster
+                , views         => Views
+                , '~diagnostic' => diagnostic(Running, S)
+                })
+        end,
+        Rest)
+  end.
 
 -spec exec_and_wait_sync([classy:site()], Action, snabbkaffe:predicate(), s()) ->
         {Result, {ok | timeout, [snabbkaffe:event()]}}
