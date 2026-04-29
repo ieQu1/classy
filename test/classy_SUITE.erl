@@ -516,6 +516,51 @@ t_090_info(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies behavior or `node_of_site' function when
+%% peer goes down. `OnlyLive' flag should prevent this function from
+%% returning an old node name.
+t_091_node_of_site(_Config) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  Sites = [S1, S2],
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       %% Prepare system:
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       #{cluster := Cluster1} = ?ON(S1, classy_node:hello()),
+       NodeMap = #{S1 => N1, S2 => N2},
+       %% Verify function in singleton clusters:
+       [?assertEqual(
+           {ok, maps:get(I, NodeMap)},
+           ?ON(I, classy:node_of_site(I, OnlyLive)))
+        || I <- Sites, OnlyLive <- [true, false]],
+       [?assertEqual(
+           undefined,
+           ?ON(I, classy:node_of_site(J, OnlyLive)))
+        || I <- Sites, J <- Sites, I =/= J, OnlyLive <- [true, false]],
+       %% Form cluster:
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster1, S2),
+       %% Verify `classy:info':
+       [?assertEqual(
+           {ok, maps:get(J, NodeMap)},
+           ?ON(I, classy:node_of_site(J, OnlyLive)))
+        || I <- Sites, J <- Sites, OnlyLive <- [true, false]],
+       %% Shut down S2 and verify that S1 reacted on changes:
+       classy_test_site:stop(S2),
+       ?assertEqual(
+          undefined,
+          ?ON(S1, classy:node_of_site(S2, true))),
+       ?assertEqual(
+          {ok, N2},
+          ?ON(S1, classy:node_of_site(S2, false)))
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
 %% This testcase verifies basic functionality of autocluster.
 t_100_autocluster(_Config) ->
   S1 = <<"s1">>,

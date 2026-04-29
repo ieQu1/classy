@@ -13,6 +13,7 @@
 %% API:
 -export([ info/0
         , clusters/1
+        , node_of_site/2
         , join_node/2
         , kick_site/2
         , kick_node/2
@@ -149,6 +150,14 @@ clusters(Nodes) ->
   #{ clusters  => Clusters
    , bad_nodes => BadNodes
    }.
+
+%% @doc Locate a node that is currently hosting a site.
+%%
+%% If `OnlyLive' flag is set, undefined is returned when the site is
+%% down (even if its node is otherwise known).
+-spec node_of_site(site(), boolean()) -> {ok, node()} | undefined.
+node_of_site(Site, OnlyLive) ->
+  classy_node:node_of_site(Site, OnlyLive).
 
 %%--------------------------------------------------------------------------------
 %% Cluster management
