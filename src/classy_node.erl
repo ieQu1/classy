@@ -14,6 +14,7 @@
         , the_cluster/0
         , nodes/1
         , peer_info/0
+        , node_of_site/2
 
         , at_lower_level/2
         ]).
@@ -164,6 +165,15 @@ peer_info() ->
     end,
     #{},
     ?site_info).
+
+-spec node_of_site(classy:site(), boolean()) -> {ok, node()} | undefined.
+node_of_site(Site, OnlyLive) ->
+  case classy_table:lookup(?site_info, Site) of
+    [#site_info{isup = IsUp, node = Node}] when IsUp; not OnlyLive ->
+      {ok, Node};
+    _ ->
+      undefined
+  end.
 
 %%================================================================================
 %% behavior callbacks
