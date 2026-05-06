@@ -586,7 +586,8 @@ t_100_autocluster(_Config) ->
      ]).
 
 %% This testcase verifies that n_restarts counter increments every
-%% time when the site is started.
+%% time when the site is started. It also verifies ID generation
+%% functions that depend on that counter.
 t_200_n_restarts(_Config) ->
   S = <<"s1">>,
   ?check_trace(
@@ -595,18 +596,71 @@ t_200_n_restarts(_Config) ->
        ?assertEqual(
           {ok, 0},
           ?ON(S, classy_node:n_restarts())),
+       ?assertEqual(
+          {0, 1},
+          ?ON(S, classy_uid:new_seq_tuple())),
+       ?assertEqual(
+          {0, 2},
+          ?ON(S, classy_uid:new_seq_tuple())),
+       ?assertEqual(
+          {S, 0, 3},
+          ?ON(S, classy_uid:new_cseq_tuple())),
        [begin
           classy_test_site:stop(S),
           classy_test_site:start(S),
           ?assertEqual(
              {ok, Nr},
-             ?ON(S, classy_node:n_restarts()))
+             ?ON(S, classy_node:n_restarts())),
+          ?assertEqual(
+             {Nr, 1},
+             ?ON(S, classy_uid:new_seq_tuple())),
+          ?assertEqual(
+             {S, Nr, 2},
+             ?ON(S, classy_uid:new_cseq_tuple()))
         end
         || Nr <- lists:seq(1, 5)]
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
+
+t_210_uid_snowflake(_Config) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  Sites = [S1, S2],
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       %% Prepare system:
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       ?assertEqual(
+          ok,
+          ?ON(S2, classy:join_node(N1, join))),
+       Timeout = 100,
+       [{ok, Snowflake1}, {ok, Snowflake2}] = erpc:multicall([N1, N2], classy_uid, new_snowflake, [], Timeout),
+       <<TS1:42, SiteHash1:10, NRestarts1:2, Seq1:10>> = Snowflake1,
+       <<TS2:42, SiteHash2:10, NRestarts2:2, Seq2:10>> = Snowflake2,
+       %% Timestamps on both nodes don't differ much:
+       ?give_or_take(
+          0,
+          Timeout,
+          TS1 - TS2),
+       %% Site hashes are different:
+       ?assert(
+          SiteHash1 =/= SiteHash2,
+          {SiteHash1, SiteHash2}),
+       %% NRestarts = 0 on both sites:
+       ?assertEqual(0, NRestarts1),
+       ?assertEqual(0, NRestarts2),
+       %% Volatile sequence starts from 1 on both nodes:
+       ?assertEqual(1, Seq1),
+       ?assertEqual(1, Seq2)
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
 
 t_999_fuzz(_Config) ->
   %% NOTE: we set timeout at the lowest level to capture the trace

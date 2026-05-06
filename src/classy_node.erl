@@ -177,7 +177,7 @@ node_of_site(Site, OnlyLive) ->
   end.
 
 %% @doc Return number of node restarts since creation of the site.
--spec n_restarts() -> {ok, pos_integer()} | {error, nodedown}.
+-spec n_restarts() -> {ok, non_neg_integer()} | {error, nodedown}.
 n_restarts() ->
   case classy_table:lookup(?ptab, ?n_restarts) of
     [N] ->
