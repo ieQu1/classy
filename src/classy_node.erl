@@ -15,6 +15,7 @@
         , nodes/1
         , peer_info/0
         , node_of_site/2
+        , n_restarts/0
 
         , at_lower_level/2
         ]).
@@ -175,6 +176,16 @@ node_of_site(Site, OnlyLive) ->
       undefined
   end.
 
+%% @doc Return number of node restarts since creation of the site.
+-spec n_restarts() -> {ok, pos_integer()} | {error, nodedown}.
+n_restarts() ->
+  case classy_table:lookup(?ptab, ?n_restarts) of
+    [N] ->
+      {ok, N};
+    _ ->
+      {error, nodedown}
+  end.
+
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
@@ -197,6 +208,7 @@ init(_) ->
   ok = classy_table:open(?ptab, #{}),
   ok = classy_table:open(?site_info, #{}),
   classy:on_membership_change(fun on_membership_change/4, -100),
+  increase_n_restarts(),
   classy_hook:foreach(?on_node_init, []),
   case init_cluster() of
     {ok, _} = Ok ->
@@ -596,6 +608,23 @@ start_old_clusters(Site) ->
         end
     end,
     classy_membership:known_clusters(Site)).
+
+-spec increase_n_restarts() -> ok.
+increase_n_restarts() ->
+  N = case classy_table:lookup(?ptab, ?n_restarts) of
+        [N0] when is_integer(N0) ->
+          N0 + 1;
+        [] ->
+          0;
+        Other ->
+          ?tp(warning, ?classy_bad_data,
+              #{ table => ?ptab
+               , key   => ?n_restarts
+               , val   => Other
+               }),
+          0
+      end,
+  classy_table:write(?ptab, ?n_restarts, N).
 
 -spec run_level(run_level_int()) -> run_level_atom();
                (run_level_atom()) -> run_level_int().

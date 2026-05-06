@@ -585,6 +585,29 @@ t_100_autocluster(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies that n_restarts counter increments every
+%% time when the site is started.
+t_200_n_restarts(_Config) ->
+  S = <<"s1">>,
+  ?check_trace(
+     begin
+       create_start_site(S, #{}),
+       ?assertEqual(
+          {ok, 0},
+          ?ON(S, classy_node:n_restarts())),
+       [begin
+          classy_test_site:stop(S),
+          classy_test_site:start(S),
+          ?assertEqual(
+             {ok, Nr},
+             ?ON(S, classy_node:n_restarts()))
+        end
+        || Nr <- lists:seq(1, 5)]
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
 t_999_fuzz(_Config) ->
   %% NOTE: we set timeout at the lowest level to capture the trace
   %% and have a nicer error message.
@@ -736,6 +759,7 @@ no_unexpected_events(Trace) ->
         , classy_hook_failure
         , classy_discovery_failure
         , classy_table_on_update_callback_failure
+        , ?classy_bad_data
         ],
         Trace)).
 
