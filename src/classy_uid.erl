@@ -11,8 +11,6 @@
 %% API:
 -export([ new_seq_tuple/0
         , new_cseq_tuple/0
-        , new_snowflake/0
-        , epoch_time/0
         ]).
 
 %% behavior callbacks:
@@ -29,11 +27,9 @@
 
 -define(pterm_uid_gen, classy_uid_gen).
 
--type pterm_uid_gen() :: #{ site                := classy:site()
-                          , site_snowflake_hash := non_neg_integer()
-                          , n_restarts          := non_neg_integer()
-                          , volatile_seqno_ctr  := atomics:atomics_ref()
-                          , ts_offset           := integer()
+-type pterm_uid_gen() :: #{ site               := classy:site()
+                          , n_restarts         := non_neg_integer()
+                          , volatile_seqno_ctr := atomics:atomics_ref()
                           }.
 
 -type seqtuple() :: {non_neg_integer(), pos_integer()}.
@@ -71,24 +67,6 @@ new_cseq_tuple() ->
   Seq = atomics:add_get(Ctr, 1, 1),
   {Site, NRestarts, Seq}.
 
-%% @doc Get a new snowflake ID.
--spec new_snowflake() -> binary().
-new_snowflake() ->
-  #{ site_snowflake_hash := SiteHash
-   , n_restarts          := NRestarts
-   , volatile_seqno_ctr  := Ctr
-   } = get_pterm(),
-  TS = epoch_time(),
-  Seq = atomics:add_get(Ctr, 1, 1),
-  %%|----42----|-----52-----|-----54-----|--64--|
-  <<0:1, TS:41, SiteHash:10, NRestarts:2, Seq:10>>.
-
-%% @doc Milliseconds since 2013-01-01 00:00:00.
--spec epoch_time() -> integer().
-epoch_time() ->
-  #{ts_offset := Offset} = get_pterm(),
-  erlang:monotonic_time(millisecond) + Offset.
-
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
@@ -99,12 +77,9 @@ init(_) ->
   process_flag(trap_exit, true),
   {ok, NRestarts} = classy_node:n_restarts(),
   {ok, Site} = classy_node:the_site(),
-  TSOffset = erlang:time_offset(millisecond) - 1_356_994_800_000,
-  set_pterm(#{ site                => Site
-             , site_snowflake_hash => site_snowflake_hash(Site)
-             , n_restarts          => NRestarts
-             , volatile_seqno_ctr  => atomics:new(1, [{signed, false}])
-             , ts_offset           => TSOffset
+  set_pterm(#{ site               => Site
+             , n_restarts         => NRestarts
+             , volatile_seqno_ctr => atomics:new(1, [{signed, false}])
              }),
   S = #s{},
   {ok, S}.
@@ -131,10 +106,6 @@ terminate(_Reason, _S) ->
 %%================================================================================
 %% Internal functions
 %%================================================================================
-
-site_snowflake_hash(Site) ->
-  <<Hash:10, _/bitstring>> = crypto:hash(sha3_224, Site),
-  Hash.
 
 -spec set_pterm(pterm_uid_gen()) -> ok.
 set_pterm(PT) ->
