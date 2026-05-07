@@ -596,27 +596,44 @@ t_200_n_restarts(_Config) ->
        ?assertEqual(
           {ok, 0},
           ?ON(S, classy_node:n_restarts())),
+       %% Verify serial UID tuples:
        ?assertEqual(
           {0, 1},
-          ?ON(S, classy_uid:new_seq_tuple())),
+          ?ON(S, classy_uid:site_unique_seq_tuple(seq))),
        ?assertEqual(
           {0, 2},
-          ?ON(S, classy_uid:new_seq_tuple())),
+          ?ON(S, classy_uid:site_unique_seq_tuple(seq))),
        ?assertEqual(
           {S, 0, 3},
-          ?ON(S, classy_uid:new_cseq_tuple())),
+          ?ON(S, classy_uid:cluster_unique_seq_tuple(seq))),
+       %% Verify regular UID tuples:
+       {0, UI1} = ?ON(S, classy_uid:site_unique_tuple()),
+       {0, UI2} = ?ON(S, classy_uid:site_unique_tuple()),
+       {S, 0, UI3} = ?ON(S, classy_uid:cluster_unique_tuple()),
+       {S, 0, UI4} = ?ON(S, classy_uid:cluster_unique_tuple()),
+       ?assertEqual(
+          [UI1, UI2, UI3, UI4],
+          lists:uniq([UI1, UI2, UI3, UI4])),
        [begin
           classy_test_site:stop(S),
           classy_test_site:start(S),
           ?assertEqual(
              {ok, Nr},
              ?ON(S, classy_node:n_restarts())),
+          %% Verify serial UID tuples:
           ?assertEqual(
              {Nr, 1},
-             ?ON(S, classy_uid:new_seq_tuple())),
+             ?ON(S, classy_uid:site_unique_seq_tuple(seq))),
           ?assertEqual(
              {S, Nr, 2},
-             ?ON(S, classy_uid:new_cseq_tuple()))
+             ?ON(S, classy_uid:cluster_unique_seq_tuple(seq))),
+            %% Verify regular UID tuples:
+            ?assertMatch(
+               {Nr, UI} when is_integer(UI),
+               ?ON(S, classy_uid:site_unique_tuple())),
+            ?assertMatch(
+               {S, Nr, UI} when is_integer(UI),
+               ?ON(S, classy_uid:cluster_unique_tuple()))
         end
         || Nr <- lists:seq(1, 5)]
      end,
