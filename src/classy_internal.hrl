@@ -43,9 +43,12 @@
 -define(classy_unknown_event, classy_unknown_event).
 -define(classy_abnormal_exit, classy_abnormal_exit).
 -define(classy_table_anomaly, classy_table_anomaly).
+-define(classy_bad_data, classy_bad_data).
 
 %% Site information:
 -define(site_info, classy_site_status_tab).
 -record(site_info, {isup, node, last_update}).
+%%    Number of restarts since creation of the site
+-define(n_restarts, n_restarts).
 
 -endif.

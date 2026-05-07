@@ -585,6 +585,62 @@ t_100_autocluster(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies that n_restarts counter increments every
+%% time when the site is started. It also verifies ID generation
+%% functions that depend on that counter.
+t_200_n_restarts(_Config) ->
+  S = <<"s1">>,
+  ?check_trace(
+     begin
+       create_start_site(S, #{}),
+       ?assertEqual(
+          {ok, 0},
+          ?ON(S, classy_node:n_restarts())),
+       %% Verify serial UID tuples:
+       ?assertEqual(
+          {0, 1},
+          ?ON(S, classy_uid:site_unique_seq_tuple(seq))),
+       ?assertEqual(
+          {0, 2},
+          ?ON(S, classy_uid:site_unique_seq_tuple(seq))),
+       ?assertEqual(
+          {S, 0, 3},
+          ?ON(S, classy_uid:cluster_unique_seq_tuple(seq))),
+       %% Verify regular UID tuples:
+       {0, UI1} = ?ON(S, classy_uid:site_unique_tuple()),
+       {0, UI2} = ?ON(S, classy_uid:site_unique_tuple()),
+       {S, 0, UI3} = ?ON(S, classy_uid:cluster_unique_tuple()),
+       {S, 0, UI4} = ?ON(S, classy_uid:cluster_unique_tuple()),
+       ?assertEqual(
+          [UI1, UI2, UI3, UI4],
+          lists:uniq([UI1, UI2, UI3, UI4])),
+       [begin
+          classy_test_site:stop(S),
+          classy_test_site:start(S),
+          ?assertEqual(
+             {ok, Nr},
+             ?ON(S, classy_node:n_restarts())),
+          %% Verify serial UID tuples:
+          ?assertEqual(
+             {Nr, 1},
+             ?ON(S, classy_uid:site_unique_seq_tuple(seq))),
+          ?assertEqual(
+             {S, Nr, 2},
+             ?ON(S, classy_uid:cluster_unique_seq_tuple(seq))),
+            %% Verify regular UID tuples:
+            ?assertMatch(
+               {Nr, UI} when is_integer(UI),
+               ?ON(S, classy_uid:site_unique_tuple())),
+            ?assertMatch(
+               {S, Nr, UI} when is_integer(UI),
+               ?ON(S, classy_uid:cluster_unique_tuple()))
+        end
+        || Nr <- lists:seq(1, 5)]
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
 t_999_fuzz(_Config) ->
   %% NOTE: we set timeout at the lowest level to capture the trace
   %% and have a nicer error message.
@@ -736,6 +792,7 @@ no_unexpected_events(Trace) ->
         , classy_hook_failure
         , classy_discovery_failure
         , classy_table_on_update_callback_failure
+        , ?classy_bad_data
         ],
         Trace)).
 

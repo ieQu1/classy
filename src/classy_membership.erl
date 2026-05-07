@@ -61,22 +61,20 @@
 
 -type clock() :: non_neg_integer().
 
--define(mem, mem).
--define(host, host).
-
--type site_prop() :: ?mem   %% Is member?
-                   | ?host. %% Which node hosts the site
+%% Types of keys stored in the cluster CRDT.
+-record(mem, {s :: classy:site() | atom()}).
+-record(host, {s :: classy:site() | atom()}).
+-type key() :: #mem{} | #host{}.
 
 %% Arbitrary term used to break ties between commands with the same logical timestamp.
 -type magic() :: term().
 
 %% The following command is used to update status of `target' site:
--record(op_set, {origin, target, k, c, m, val, owt, reserved}).
+-record(op_set, {origin, k, c, m, val, owt, reserved}).
 
 -type op() ::
         #op_set{ origin :: classy:site() %% Site that issued the command
-               , target :: classy:site() %% Site which is being updated
-               , k :: site_prop()        %% Property of the target site that is being updated
+               , k :: key()              %% Property of the target site that is being updated
                , c :: clock()            %% Logical time at `origin' when it issued the command:
                , m :: magic()            %% This term can be used to break ties. It's not super relevant.
                , val :: term()           %% Updated value
@@ -106,7 +104,7 @@
 %% Timeout message triggering syncing out state
 -record(to_sync_out, {}).
 
--record(call_set, {target :: classy:site(), k :: site_prop(), v :: term()}).
+-record(call_set, {k :: key(), v :: term()}).
 -record(call_cleanup, {forget_after :: pos_integer()}).
 -record(call_flush, {}).
 -record(call_get_data, {since :: clock(), acked :: clock()}).
@@ -134,8 +132,8 @@
 %% Clock of the last sync message to the peer:
 -record(pk_acked_out, {c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}).
 %% Last set command for the site:
--record(pk_last, {c, l, r, k}).
--type pk_last() :: #pk_last{c :: classy:cluster_id(), l :: classy:site(), r :: classy:site(), k :: site_prop()}.
+-record(pk_last, {c, l, k}).
+-type pk_last() :: #pk_last{c :: classy:cluster_id(), l :: classy:site(), k :: key()}.
 %% Hooks have been executed for all site states older than this:
 -record(pk_hooks_ran, {c :: classy:cluster_id(), l :: classy:site()}).
 
@@ -156,7 +154,7 @@ known_clusters(Site) ->
   ets:foldl(
     fun(#classy_kv{k = K}, Acc) ->
         case K of
-          #pk_last{c = Cluster, l = Local, r = Remote} when Local =:= Site ->
+          #pk_last{c = Cluster, l = Local, k = #mem{s = Remote}} when Local =:= Site ->
             maps:update_with(
               Cluster,
               fun(L) -> [Remote | L] end,
@@ -177,11 +175,11 @@ known_clusters(Site) ->
 %% This fictitious site will become a member until kicked,
 %% and even then some records about it may be kept around.
 -spec set_member(classy:cluster_id(), classy:site(), classy:site(), boolean()) -> ok | {error, _}.
-set_member(Cluster, Local, Target, Mem) when is_boolean(Mem) ->
+set_member(Cluster, Local, Target, IsMember) when is_boolean(IsMember) ->
   try
     gen_server:call(
       ?via(Cluster, Local),
-      #call_set{target = Target, k = ?mem, v = Mem},
+      #call_set{k = #mem{s = Target}, v = IsMember},
       ?call_timeout)
   catch
     EC:Err -> {error, {EC, Err}}
@@ -195,7 +193,7 @@ set_member(Cluster, Local, Target, Mem) when is_boolean(Mem) ->
 %% In both cases the result value can't be trusted.
 -spec members(classy:cluster_id(), classy:site()) -> [classy:site()].
 members(Cluster, Local) ->
-  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1', k = mem}
+  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, k = #mem{s = '$1', _ = '_'}, _ = '_'}
                    , v = #pv_last{op = #op_set{val = true, _ = '_'}, _ = '_'}
                    , _ = '_'
                    }
@@ -258,8 +256,7 @@ dump() ->
         case K of
           #pk_last{c = Cluster, l = Local} ->
             #pv_last{ op = #op_set{ origin = Origin
-                                  , target = Target
-                                  , k = Prop
+                                  , k = Key
                                   , c = Clock
                                   , val = Val
                                   , owt = OWT
@@ -267,8 +264,12 @@ dump() ->
                     , toi = TOI
                     } = V,
             Info = {Val, #{origin => Origin, ltime => Clock, wtime => OWT, ltime_imported => TOI}},
+            Path = case Key of
+                     #mem{s = Target}  -> [peers, Target, mem];
+                     #host{s = Target} -> [peers, Target, host]
+                   end,
             classy_lib:map_deep_insert(
-              [{Cluster, Local}, peers, Target, Prop],
+              [{Cluster, Local} | Path],
               Info,
               Acc);
           #pk_acked_out{c = Cluster, l = Local, r = Remote} ->
@@ -371,14 +372,12 @@ init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluste
   %% (with clock = 0) is used to set the default value.
   S1 = local_command(
          0,
-         #call_set{ target = Site
-                  , k = ?mem
+         #call_set{ k = #mem{s = Site}
                   , v = true
                   },
          S0),
   S = local_command(
-        #call_set{ target = Site
-                 , k = ?host
+        #call_set{ k = #host{s = Site}
                  , v = node()
                  },
         S1),
@@ -489,15 +488,13 @@ local_command(Cmd, S0) ->
   local_command(C, Cmd, S).
 
 -spec local_command(clock(), #call_set{}, #s{}) -> #s{}.
-local_command(C, #call_set{target = Target, k = K, v = V}, S = #s{site = Local}) ->
+local_command(C, #call_set{k = K, v = V}, S = #s{site = Local}) ->
   ?tp(classy_local_command,
-      #{ target => Target
-       , prop => K
+      #{ key => K
        , val => V
        , clock => C
        }),
   Op = #op_set{ origin = Local
-              , target = Target
               , c = C
               , k = K
               , val = V
@@ -593,8 +590,8 @@ get_sync_data(Since, Acked, S = #s{cluster = Cluster, site = Local, clock = C}) 
 
 -spec merge(clock(), op(), #s{}) -> boolean().
 merge(LTime, Op, S) ->
-  #op_set{target = Site, k = K} = Op,
-  case memtab_lookup(Site, K, S) of
+  #op_set{k = K} = Op,
+  case memtab_lookup(K, S) of
     {ok, Op0} ->
       case ord(Op) > ord(Op0) of
         true ->
@@ -611,7 +608,7 @@ merge(LTime, Op, S) ->
 run_hooks(S = #s{clock = C, cluster = Cluster, site = Local}) ->
   UpdatedEntries = memtab_since(hooks_ran(S) + 1, S),
   lists:foreach(
-    fun(Op = #op_set{target = Peer, k = ?mem}) ->
+    fun(Op = #op_set{k = #mem{s = Peer}}) ->
         IsUp = state(Op),
         classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, IsUp]);
        (#op_set{}) ->
@@ -646,8 +643,8 @@ sites_for_cleanup(SecsDown, S) ->
   [I || I <- LongGone, max_toi(I, S) =< MinAcked].
 
 forget_site(Site, #s{cluster = Cluster, site = Local}) when is_binary(Site) ->
-  classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, r = Site, k = ?mem}),
-  classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, r = Site, k = ?host}),
+  classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, k = #mem{s = Site}}),
+  classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, k = #host{s = Site}}),
   classy_table:dirty_delete(?ptab, #pk_acked_in{c = Cluster, l = Local, r = Site}),
   classy_table:dirty_delete(?ptab, #pk_acked_out{c = Cluster, l = Local, r = Site}),
   ok.
@@ -658,15 +655,15 @@ forget_site(Site, #s{cluster = Cluster, site = Local}) when is_binary(Site) ->
 
 -spec set_last(clock(), op(), #s{}) -> ok.
 set_last(LTime, Op, #s{cluster = Cluster, site = Local}) ->
-  #op_set{target = Target, k = K} = Op,
+  #op_set{k = K} = Op,
   classy_table:dirty_write(
     ?ptab,
-    #pk_last{c = Cluster, l = Local, r = Target, k = K},
+    #pk_last{c = Cluster, l = Local, k = K},
     #pv_last{op = Op, toi = LTime}).
 
--spec memtab_lookup(classy:site(), site_prop(), #s{}) -> {ok, op()} | undefined.
-memtab_lookup(Site, K, #s{cluster = Cluster, site = Local}) ->
-  case classy_table:lookup(?ptab, #pk_last{c = Cluster, l = Local, r = Site, k = K}) of
+-spec memtab_lookup(key(), #s{}) -> {ok, op()} | undefined.
+memtab_lookup(K, #s{cluster = Cluster, site = Local}) ->
+  case classy_table:lookup(?ptab, #pk_last{c = Cluster, l = Local, k = K}) of
     [#pv_last{op = Op}] ->
       {ok, Op};
     [] ->
@@ -686,7 +683,7 @@ memtab_since(Since, #s{cluster = Cluster, site = Local}) ->
 
 -spec peers(#s{}) -> [classy:site()].
 peers(#s{cluster = Cluster, site = Local}) ->
-  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1', k = ?mem}
+  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, k = #mem{s = '$1'}}
                    , _ = '_'
                    }
        , []
@@ -699,7 +696,7 @@ nodes_of_cluster(#s{cluster = Cluster, site = Local}) ->
   maps:from_list(select_nodes(Cluster, Local, {{'$1', '$2'}})).
 
 select_nodes(Cluster, Local, Action) ->
-  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = '$1', k = ?host}
+  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local,  k = #host{s = '$1'}}
                    , v = #pv_last{op = #op_set{val = '$2', _ = '_'}, _ = '_'}
                    , _ = '_'
                    }
@@ -707,7 +704,6 @@ select_nodes(Cluster, Local, Action) ->
        , [Action]
        },
   ets:select(?ptab, [MS]).
-
 
 %% @private Find minimal Lamport clock, such that:
 %%
@@ -733,7 +729,7 @@ min_acked(Sites, S = #s{site = Local}) ->
 
 -spec is_long_gone(pos_integer(), classy:site(), #s{}) -> boolean().
 is_long_gone(MinTimeWhenKicked, Site, S) ->
-  case memtab_lookup(Site, ?mem, S) of
+  case memtab_lookup(#mem{s = Site}, S) of
     {ok, #op_set{val = false, owt = TimeWhenKicked}} when
         TimeWhenKicked < MinTimeWhenKicked ->
       true;
@@ -744,14 +740,14 @@ is_long_gone(MinTimeWhenKicked, Site, S) ->
 %% @doc Return maximum `toi' for any property of the site.
 -spec max_toi(classy:site(), #s{}) -> clock() | undefined.
 max_toi(Site, #s{cluster = Cluster, site = Local}) ->
-  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, r = Site, _ = '_'}
-                   , v = #pv_last{toi = '$1', _ = '_'}
-                   , _ = '_'
-                   }
-       , []
-       , ['$1']
-       },
-  L = ets:select(?ptab, [MS]),
+  MS = [{ #classy_kv{ k = #pk_last{c = Cluster, l = Local, k = Key, _ = '_'}
+                    , v = #pv_last{toi = '$1', _ = '_'}
+                    , _ = '_'
+                    }
+        , []
+        , ['$1']
+        } || Key <- [#mem{s = Site}, #host{s = Site}]],
+  L = ets:select(?ptab, MS),
   case L of
     [] -> undefined;
     _  -> lists:max(L)
@@ -857,32 +853,28 @@ table_scans_test() ->
        true = merge(
                 0,
                 #op_set{ origin = <<"s1">>
-                       , target = <<"s1">>
-                       , k = ?mem
+                       , k = #mem{s = <<"s1">>}
                        , val = true
                        },
                 S),
        true = merge(
                 0,
                 #op_set{ origin = <<"s1">>
-                       , target = <<"s1">>
-                       , k = ?host
+                       , k = #host{s = <<"s1">>}
                        , val = 'n1@localhost'
                        },
                 S),
        true = merge(
                 0,
                 #op_set{ origin = <<"s1">>
-                       , target = <<"s2">>
-                       , k = ?mem
+                       , k = #mem{s = <<"s2">>}
                        , val = false
                        },
                 S),
        true = merge(
                 0,
                 #op_set{ origin = <<"s1">>
-                       , target = <<"s2">>
-                       , k = ?host
+                       , k = #host{s = <<"s2">>}
                        , val = 'n2@localhost'
                        },
                 S)
@@ -923,8 +915,7 @@ is_long_gone_test() ->
        true = merge(
                 0,
                 #op_set{ origin = <<"s1">>
-                       , target = <<"s1">>
-                       , k = ?mem
+                       , k = #mem{s = <<"s1">>}
                        , val = true
                        , owt = 0
                        },
@@ -932,8 +923,7 @@ is_long_gone_test() ->
        true = merge(
                 0,
                 #op_set{ origin = <<"s1">>
-                       , target = <<"s2">>
-                       , k = ?mem
+                       , k = #mem{s = <<"s2">>}
                        , val = false
                        , owt = 1
                        },
@@ -941,8 +931,7 @@ is_long_gone_test() ->
        true = merge(
                 0,
                 #op_set{ origin = <<"s1">>
-                       , target = <<"s3">>
-                       , k = ?mem
+                       , k = #mem{s = <<"s3">>}
                        , val = true
                        , owt = 1
                        },
@@ -950,8 +939,7 @@ is_long_gone_test() ->
        true = merge(
                 0,
                 #op_set{ origin = <<"s1">>
-                       , target = <<"s4">>
-                       , k = ?mem
+                       , k = #mem{s = <<"s4">>}
                        , val = false
                        , owt = 2
                        },

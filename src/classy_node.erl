@@ -15,6 +15,7 @@
         , nodes/1
         , peer_info/0
         , node_of_site/2
+        , n_restarts/0
 
         , at_lower_level/2
         ]).
@@ -74,8 +75,8 @@
 %% Any `undefined' argument is replaced with a sufficiently unique random string.
 -spec maybe_init_the_site(classy:site() | undefined) -> ok.
 maybe_init_the_site(MaybeSite) ->
-  {_, Site} = ensure_value(?the_site, ?on_create_site, [], MaybeSite),
-  _ = ensure_value(?the_cluster, ?on_create_cluster, [Site], undefined),
+  {_, Site} = ensure_the_id(?the_site, ?on_create_site, [], MaybeSite),
+  _ = ensure_the_id(?the_cluster, ?on_create_cluster, [Site], undefined),
   ok.
 
 %% @private
@@ -175,6 +176,16 @@ node_of_site(Site, OnlyLive) ->
       undefined
   end.
 
+%% @doc Return number of node restarts since creation of the site.
+-spec n_restarts() -> {ok, non_neg_integer()} | {error, nodedown}.
+n_restarts() ->
+  case classy_table:lookup(?ptab, ?n_restarts) of
+    [N] ->
+      {ok, N};
+    _ ->
+      {error, nodedown}
+  end.
+
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
@@ -197,6 +208,7 @@ init(_) ->
   ok = classy_table:open(?ptab, #{}),
   ok = classy_table:open(?site_info, #{}),
   classy:on_membership_change(fun on_membership_change/4, -100),
+  increase_n_restarts(),
   classy_hook:foreach(?on_node_init, []),
   case init_cluster() of
     {ok, _} = Ok ->
@@ -452,7 +464,7 @@ on_leave(S0 = #s{cluster = Cluster, site = Local}, Intent) ->
 join_cluster(Cluster, JoinToNode, Local, S = #s{run_level = 0}) ->
   {ok, _} = classy_sup:ensure_membership(Cluster, Local),
   classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode]),
-  set_val(?the_cluster, Cluster),
+  classy_table:write(?ptab, ?the_cluster, Cluster),
   {ok, S#s{cluster = Cluster, peer_state = #{}}}.
 
 %% Update node tracking information
@@ -541,9 +553,9 @@ init_cluster() ->
       {error, default_site_not_initialized}
   end.
 
--spec ensure_value(?the_cluster | ?the_site, ?on_create_cluster | ?on_create_site, list(), binary() | undefined) ->
+-spec ensure_the_id(?the_cluster | ?the_site, ?on_create_cluster | ?on_create_site, list(), binary() | undefined) ->
         {boolean(), binary()}.
-ensure_value(Key, OnCreateHook, HookArgs, Default) ->
+ensure_the_id(Key, OnCreateHook, HookArgs, Default) ->
   case classy_table:lookup(?ptab, Key) of
     [Bin] when is_binary(Bin) ->
       {false, Bin};
@@ -555,12 +567,9 @@ ensure_value(Key, OnCreateHook, HookArgs, Default) ->
           ok
       end,
       classy_hook:foreach(OnCreateHook, [Val | HookArgs]),
-      set_val(Key, Val),
+      classy_table:write(?ptab, Key, Val),
       {true, Val}
   end.
-
-set_val(Key, Val) when is_binary(Val) ->
-  classy_table:write(?ptab, Key, Val).
 
 -spec adjust_run_level(#s{}) -> #s{}.
 adjust_run_level(S = #s{cluster = Cluster, site = Site}) ->
@@ -599,6 +608,23 @@ start_old_clusters(Site) ->
         end
     end,
     classy_membership:known_clusters(Site)).
+
+-spec increase_n_restarts() -> ok.
+increase_n_restarts() ->
+  N = case classy_table:lookup(?ptab, ?n_restarts) of
+        [N0] when is_integer(N0) ->
+          N0 + 1;
+        [] ->
+          0;
+        Other ->
+          ?tp(warning, ?classy_bad_data,
+              #{ table => ?ptab
+               , key   => ?n_restarts
+               , val   => Other
+               }),
+          0
+      end,
+  classy_table:write(?ptab, ?n_restarts, N).
 
 -spec run_level(run_level_int()) -> run_level_atom();
                (run_level_atom()) -> run_level_int().

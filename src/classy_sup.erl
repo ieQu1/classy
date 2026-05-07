@@ -87,6 +87,12 @@ init(#top{}) ->
           , restart  => permanent
           , type     => worker
           },
+  UIDGen = #{ id       => uid
+            , start    => {classy_uid, start_link, []}
+            , shutdown => 5_000
+            , restart  => permanent
+            , type     => worker
+            },
   Autoclean = #{ id       => autoclean
                , start    => {classy_autoclean, start_link, []}
                , shutdown => 10_000
@@ -102,6 +108,7 @@ init(#top{}) ->
   Children = [ sup_spec(#{id => ?TABLE_SUP, start => {?MODULE, start_link_table_sup, []}})
              , sup_spec(#{id => ?MEMBERSHIP_SUP, start => {?MODULE, start_link_membership_sup, []}})
              , Node
+             , UIDGen
              , Autoclean
              , Autocluster
              ],
