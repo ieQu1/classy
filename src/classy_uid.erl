@@ -21,6 +21,8 @@
 
 -export_type([seqtuple/0, cseqtuple/0]).
 
+-include("classy_internal.hrl").
+
 %%================================================================================
 %% Type declarations
 %%================================================================================
@@ -84,15 +86,31 @@ init(_) ->
   S = #s{},
   {ok, S}.
 
-handle_call(_Call, _From, S) ->
+handle_call(Call, From, S) ->
+  ?tp(warning, ?classy_unknown_event,
+      #{ kind => call
+       , from => From
+       , content => Call
+       , server => ?MODULE
+       }),
   {reply, {error, unknown_call}, S}.
 
-handle_cast(_Cast, S) ->
+handle_cast(Cast, S) ->
+  ?tp(warning, ?classy_unknown_event,
+      #{ kind => cast
+       , content => Cast
+       , server => ?MODULE
+       }),
   {noreply, S}.
 
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
-handle_info(_Info, S) ->
+handle_info(Info, S) ->
+  ?tp(warning, ?classy_unknown_event,
+      #{ kind => info
+       , content => Info
+       , server => ?MODULE
+       }),
   {noreply, S}.
 
 terminate(_Reason, _S) ->
