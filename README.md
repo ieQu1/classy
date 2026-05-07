@@ -21,6 +21,7 @@ An application that helps manage a cluster of Erlang nodes.
 - **Persistence layer**:
   classy implements a standalone persistent table similar to mnesia `local_content` `disk_copies` table,
   that can be used by 3rd party applications.
+- **Unique ID generation**
 - **Test helpers**:
   classy implements a wrapper for [peer](https://www.erlang.org/doc/apps/stdlib/peer.html) to simplify testing of distributed applications.
   It also provides a standard property-based test helper for testing application code with regard to cluster changes.
