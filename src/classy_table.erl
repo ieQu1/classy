@@ -46,7 +46,7 @@ They are meant for the situations where some keys are frequently updated,
 but these updates can be lost.
 
 There is no automatic flushing of dirty operations,
-the business code must call @ref{classy_table:flush/1} function explicitly.
+the business code must call @code{@erlfn{ref,erlicall,classy_table,flush,1}(Table)} function explicitly.
 
 If it fails to do so,
 all work for persisting the data will be done on terminate or after a durable mutation,
@@ -58,7 +58,7 @@ It's optimized for simplicity, not storage efficiency or performance.
 
 @item
 While this module guarantees that durable mutations don't return until the data is committed to WAL,
-it is currently possible to @emph{read} uncommitted writes via @ref{classy_table:lookup/2} or plain ets queries.
+it is currently possible to @emph{read} uncommitted writes via @erlfn{ref,erlref,classy_table,lookup,2} or plain ets queries.
 
 So, do not use classy tables as a synchronization mechanism between different processes.
 
@@ -140,7 +140,7 @@ All classy tables are named ETS tables.
 -define(clear, clear).
 
 -doc """
-A type of operation in a batch accepted by @link{classy_table:atomically/2,atomically}.
+A type of operation in a batch accepted by @erlfn{ref,erlref,classy_table,atomically,2}.
 
 @itemize
 @item @code{@{w, Key, Value@}}
@@ -298,11 +298,11 @@ stop(Tab, Timeout) ->
 Update the RAM representation of the record and mark it as dirty.
 No writes to disk are made until any of the following calls complete:
 @itemize
-@item @ref{classy_table:flush/1}
-@item @ref{classy_table:stop/2}
-@item @ref{classy_table:write/3}
-@item @ref{classy_table:delete/2}
-@item  @ref{classy_table:atomically/2}
+@item @erlfn{ref,erlref,classy_table,flush,1}
+@item @erlfn{ref,erlref,classy_table,stop,2}
+@item @erlfn{ref,erlref,classy_table,write,3}
+@item @erlfn{ref,erlref,classy_table,delete,2}
+@item @erlfn{ref,erlref,classy_table,atomically,2}
 @end itemize
 """.
 -spec dirty_write(tab(), _Key, _Val) -> ok.
@@ -322,7 +322,7 @@ While this module batches writes,
 writes or deletes coming from a single process are always interleaved with a datasync.
 
 If some process needs to reliably update a large number of records at once,
-it's better to use @ref{classy_table:atomically/2}.
+it's better to use @erlfn{ref,erlref,classy_table,atomically,2}.
 """.
 -spec write(tab(), _Key, _Val) -> ok | {error, _}.
 write(Tab, Key, Val) ->
@@ -332,9 +332,9 @@ write(Tab, Key, Val) ->
     ?call_timeout).
 
 -doc """
-Dirty version of @ref{classy_table:delete/2}.
+Dirty version of @erlfn{ref,erlref,classy_table,delete,2}.
 From durability perspective,
-it has the same properties as @ref{classy_table:dirty_write/3}.
+it has the same properties as @erlfn{ref,erlref,classy_table,dirty_write,3}.
 """.
 -spec dirty_delete(tab(), _Key) -> ok.
 dirty_delete(Tab, Key) ->
@@ -346,7 +346,7 @@ dirty_delete(Tab, Key) ->
 -doc """
 Delete a record from the table.
 From durability perspective,
-it has the same properties as @ref{classy_table:write/3}.
+it has the same properties as @erlfn{ref,erlref,classy_table,write,3}.
 """.
 -spec delete(tab(), _Key) -> ok | {error, _}.
 delete(Tab, Key) ->
@@ -359,7 +359,7 @@ delete(Tab, Key) ->
 Commit a number of operations into a table atomically:
 either all or none of operations are durably stored by the time this function returns.
 
-Operations are denoted via @ref{t:classy_table:atomic_op/1} type.
+Operations are denoted via @erltp{ref,erlref,classy_table,atomic_op,1} type.
 """.
 -spec atomically(tab(), [atomic_op(Effect)]) -> {ok, [Effect]} | {error, _}.
 atomically(_Tab, []) ->
@@ -490,7 +490,7 @@ clear(Tab) ->
     ?call_timeout).
 
 -doc """
-@xref{classy_table:dump_wal/2}, uses the default directory.
+@erlfn{xref,erlref,classy_table,dump_wal,2}, uses the default directory.
 """.
 -spec dump_wal(tab()) -> {ok, list()} | {error, _}.
 dump_wal(Tab) when is_atom(Tab) ->

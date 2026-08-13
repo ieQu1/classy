@@ -31,13 +31,14 @@ conf() ->
             ]
         }
    , texinfo =>
-       #{ sources => ["doc/classy.texi"]
-        , formats => [html, info]
-        , compile =>
+       #{ compile =>
             [#{ format => html
               , options => ["-c", "INFO_JS_DIR=js"]
               }
             ]
+        , formats => [info, html]
+        , sources => ["doc/classy.texi"]
+        , include_dirs => [anvl_texinfo_erlang:includes_dir()]
         }
    }.
 
@@ -55,6 +56,6 @@ compile() ->
 
 ?MEMO(docs,
       begin
-        precondition(anvl_texinfo:erl_doc(default, classy)) or
+        precondition(anvl_texinfo_erlang:app_docs_extracted(anvl_project:root(), default, classy)) or
           precondition(anvl_texinfo:compiled(anvl_project:root()))
       end).

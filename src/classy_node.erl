@@ -101,7 +101,7 @@ then site ID is initialized to a random value.
 @end enumerate
 
 When site ID changes,
-@ref{classy:on_create_site/2} callback runs.
+@erlfn{ref,erlref,classy,on_create_site,2} callback runs.
 
 Cluster ID initialization logic is similar,
 but there's no way to customize the initial value.

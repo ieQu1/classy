@@ -84,7 +84,7 @@ Misc. utility functions.
 %%================================================================================
 
 -doc """
-@xref{classy_lib:safe_apply/3}
+@erlfn{xref,erlref,classy_lib,safe_apply,3}.
 """.
 -spec safe_apply(callback()) -> {ok, term()} | wrapped_exception().
 safe_apply({M, F, A}) ->
@@ -131,7 +131,7 @@ safe_apply_with_timeout(Callback, Timeout) ->
   end.
 
 -doc """
-Call functions on multiple sites similarly to @ref{classy_lib:multicall/2}
+Call functions on multiple sites similarly to @erlfn{ref,erlref,classy_lib,multicall,2}
 without waiting for the results.
 """.
 -spec multicast(multicall_args()) -> ok.
@@ -155,7 +155,7 @@ multicast(SitesWithArgs) ->
     SitesWithArgs).
 
 -doc """
-@xref{classy_lib:multicall/2}.
+@erlfn{xref,erlref,classy_lib,multicall,2}.
 Uses the default timeout.
 """.
 -spec multicall(multicall_args()) -> multicall_result(term()).
@@ -182,7 +182,7 @@ abandon waiting for replies after the specified timeout.
 @b{Return value:}
 
 A map from RPC target to @code{@{ok, Return@}} tuple if the call was successful
-or an error tuple @ref{t:classy_lib:multicall_error/0}.
+or an error tuple @erltp{ref,erlref,classy_lib,multicall_error,0}.
 
 @b{Example:}
 
@@ -269,7 +269,7 @@ sites_to_nodes(Sites) ->
     Sites).
 
 -doc """
-Perform a fold over the result of @ref{classy:info/1}
+Perform a fold over the result of @erlfn{ref,erlref,classy,info,1}
 with a separate accumulator per cluster.
 
 @code{InitialAcc} parameter is used as the initial value of the accumulator for each cluster.
@@ -363,7 +363,7 @@ wakeup_after(Msg, After, {OldDeadline, OldTRef} = Old) ->
   end.
 
 -doc """
-Cancel a timer created by @ref{classy_lib:wakeup_after/3}.
+Cancel a timer created by @erlfn{ref,erlref,classy_lib,wakeup_after,3}.
 This function is idempotent.
 """.
 -spec cancel_wakeup(wakeup_timer()) -> undefined.

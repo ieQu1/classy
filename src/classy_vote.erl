@@ -24,7 +24,7 @@ during the decision stage.
 
 This API uses both synchronous and asynchronous methods of status and error reporting.
 Both methods must be handled in all cases.
-Note: when @link{classy_vote:create/1,create/1} API returns @code{@{ok, _@}},
+Note: when @erlfn{link,erlref,classy_vote,create,1} API returns @code{@{ok, _@}},
 it doesn't mean the commit has been completed.
 
 @enumerate
@@ -168,7 +168,7 @@ Common vote options.
   Ongoing commit actions can be efficiently filtered by the tag.
 
 @item actions
-  A map from @link{t:classy:site/0,site ID} to per-site @ref{t:classy_vote:actions/0, commit actions}.
+  A map from site ID to per-site commit actions (@erltp{pxref,erlref,classy_vote,actions,0}).
   Each site in the map becomes a vote participant.
   Participants' actions may be non-uniform.
 
@@ -188,12 +188,12 @@ Common vote options.
   This callback can be retried on node restart.
 
 @item strategy
-  @xref{t:classy_vote:strategy/0,strategy()}.
+  @erltp{xref,erlref,classy_vote,strategy,0}.
 
 @item on_fail
   Executed on both coordinator and participant if commit / rollback / post_commit actions fail.
   This callback may be used to signal failures to the business logic.
-  Classy prepends an argument of type @ref{t:classy_vote:fail_info/0} to the user-specified argument list.
+  Classy prepends an argument of type @erltp{ref,erlref,classy_vote,fail_info,0} to the user-specified argument list.
 
 @item run_level
   Minimum run level required to run vote actions.
@@ -244,7 +244,7 @@ Common vote options.
 %%================================================================================
 
 -doc """
-@xref{classy_vote:ls_votes/1}. No filtering.
+@erlfn{xref,erlref,classy_vote,ls_votes,1}. No filtering.
 """.
 -spec ls_votes() -> [vote_info()].
 ls_votes() ->
@@ -281,7 +281,7 @@ fold_ongoing(Fun, Acc0, TagMatch) ->
     TagMatch).
 
 -doc """
-Initiate a new vote, @pxref{t:classy_vote:options/0,options/0}.
+Initiate a new vote (@erltp{pxref,erlref,classy_vote,options,0}).
 """.
 -spec create(options()) -> {ok, classy_vote:id()} | {error, _}.
 create(UserOptions) ->
