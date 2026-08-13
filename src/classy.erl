@@ -11,7 +11,10 @@ Note: business releases can install hooks by setting
 @code{@{Module, Function, Args@}}.
 This MFA can contain calls to various @code{classy:on_...} functions.
 
-@xref{api/classy/classy_site_metadata,classy_site_metadata} module.
+See also:
+@erlmodref{ref,classy_site_metadata},
+@erlmodref{ref,classy_vote},
+@erlmodref{ref,classy_uid}.
 """.
 
 %% API:
@@ -132,7 +135,7 @@ Unique random persistent identifier of the site.
          }.
 
 -doc """
-Join intent is an arbitrary term passed to @ref{classy:pre_join/2} and @ref{classy:post_join/2} hooks.
+Join intent is an arbitrary term passed to @erlfn{ref,erlref,classy,pre_join,2} and @erlfn{ref,erlref,classy,post_join,2} hooks.
 @code{pre_join} may match on intent to prevent join in certain cases,
 while to @code{post_join} this value is merely informational.
 
@@ -145,7 +148,7 @@ When join is triggered by autocluster.
 -type join_intent() :: term().
 
 -doc """
-Kick intent is an arbitrary term passed to @link{classy:pre_kick/2}, @link{classy:on_kick_decided/2} and @link{classy:on_leave/2} hooks.
+Kick intent is an arbitrary term passed to @erlfn{ref,erlref,classy,pre_kick,2}, @erlfn{ref,erlref,classy,on_kick_decided,2} and @erlfn{ref,erlref,classy,on_leave,2} hooks.
 @code{pre_kick} may use intent to make a decision leaving the cluster in certain cases,
 while to @code{on_leave} this value is merely informational.
 
@@ -261,13 +264,13 @@ info() ->
   classy_hook:fold(?on_enrich_site_info, [], Acc).
 
 -doc """
-Gather @ref{classy:info/0} from a set of nodes.
+Gather @erlfn{ref,erlref,classy,info,0} from a set of nodes.
 
 The nodes don't have to be in the same cluster.
 
 WARNING: as a side effect of calling this function,
 the current node will establish Erlang distribution connection to all nodes in the list.
-While this won't affect code using @code{@link{classy:nodes/1,classy:nodes}(connected)} API,
+While this won't affect code using @code{@erlfn{link,erlcall,classy,nodes,1}(connected)} API,
 it may confuse code using plain @code{erlang:nodes()}.
 """.
 -spec info([node()]) -> cluster_info().
@@ -308,7 +311,7 @@ Get cached site metadata for a remote site.
 
 NOTE: This function works even if the site is down.
 
-@xref{api/classy/classy_site_metadata,classy_site_metadata} module.
+@erlmodref{ref,classy_site_metadata} module.
 """.
 -spec get_meta(classy:site()) -> {ok, site_metadata()} | undefined.
 get_meta(Site) ->
@@ -335,7 +338,7 @@ n_restarts() ->
 Get cached value of the number of restarts of a remote site.
 
 Note: for the local site,
-please call @ref{classy:n_restarts/0},
+please call @erlfn{ref,erlref,classy,n_restarts,0},
 as values returned by this function may be out-of-date.
 """.
 -spec n_restarts(site()) -> {ok, non_neg_integer()} | undefined.
@@ -385,10 +388,10 @@ Arguments:
 @enumerate
 @item Name of a node to join.
 
-Note: while the majority of classy APIs work with @ref{t:classy:site/0, site IDs},
+Note: while the majority of classy APIs work with site IDs,
 joining a cluster is always done via regular Erlang node name.
 
-@item Join intent, @pxref{t:classy:join_intent/0, join_intent()}
+@item Join intent, @erltp{pxref,erlref,classy,join_intent,0}.
 @end enumerate
 """.
 -spec join_node(node(), join_intent()) -> ok | {error, _}.
@@ -400,29 +403,29 @@ Remove a site from the cluster.
 Target site can be local or remote:
 it is allowed for a site to kick itself from the cluster.
 
-The kicked site creates an entirely new @ref{t:classy:cluster_id/0, cluster_id()},
+The kicked site creates an entirely new cluster ID,
 and joins it as a singleton member.
 
 Local site (one that initiates kick) runs the following hooks
 with @code{Intent} equal to the value of the argument:
 @enumerate
-@item @ref{classy:pre_kick/2}.
+@item @erlfn{ref,erlref,classy,pre_kick,2}.
 It can decide that removing a site is unsafe and abort the command.
 
-@item @ref{classy:on_leave/2}.
+@item @erlfn{ref,erlref,classy,on_leave,2}.
 This hook is executed after the target is successfully kicked.
 @end enumerate
 
 NOTE: the intent is not propagated across different sites.
 If the target site is not the same as the local site,
-then the target runs @ref{classy:on_leave/2} with pre-defined intent @code{kicked}.
+then the target runs @erlfn{ref,erlref,classy,on_leave,2} with pre-defined intent @code{kicked}.
 """.
 -spec kick_site(site(), kick_intent()) -> ok | {error, _}.
 kick_site(Site, Intent) ->
   classy_node:kick_site(Site, Intent).
 
 -doc """
-Translate node name to a site ID and kick it via @ref{classy:kick_site/2}.
+Translate node name to a site ID and kick it via @erlfn{ref,erlref,classy,kick_site,2}.
 """.
 -spec kick_node(node(), kick_intent()) -> ok | {error, _}.
 kick_node(Node, Intent) ->
@@ -504,7 +507,7 @@ at_lower_level(RunLevel, Fun) ->
 -doc """
 Get current run level.
 
-NOTE: the value is updated after all @link{classy:run_level/2} hooks complete.
+NOTE: the value is updated after all @erlfn{link,erlref,classy,run_level,2} hooks complete.
 """.
 -spec run_level() -> run_level().
 run_level() ->
@@ -605,7 +608,7 @@ fault_tolerance(N) ->
 -doc """
 Register a hook that is executed when the node (not the site) starts.
 
-It is called before @ref{classy:the_site/0} and @code{classy:the_cluster/0}
+It is called before @erlfn{ref,erlref,classy,the_site,0} and @code{classy:the_cluster/0}
 are initialized,
 and can be used to override the default cluster and site initialization logic.
 """.
@@ -673,7 +676,7 @@ on_membership_change(Hook, Prio) ->
 -doc """
 Register a hook that is executed when a site changes status for up to down or vice versa.
 
-Note: this hook is different from @ref{classy:on_peer_connection_change/2},
+Note: this hook is different from @erlfn{ref,erlref,classy,on_peer_connection_change,2},
 as care is taken to avoid firing it during a network partition.
 
 The decision to consider a peer down comes either from the peer itself when it shuts down gracefully
@@ -714,9 +717,9 @@ on_peer_restart(Hook, Prio) ->
 
 -doc """
 Register a hook that can place a site's node into an arbitrary number of custom node sets,
-based on @ref{t:classy:info/0}.
+based on @erltp{ref,erlref,classy,info,0}.
 
-@xref{classy:enrich_site_info/2}, @xref{classy:node_sets/0}.
+@erlfn{xref,erlref,classy,enrich_site_info,2}, @erlfn{xref,erlref,classy,node_sets,0}.
 """.
 -spec on_node_classify(
         fun((site_metadata()) -> [node_set()]),
@@ -769,7 +772,7 @@ pre_kick(Hook, Prio) ->
   classy_hook:insert(?on_pre_kick, Hook, Prio).
 
 -doc """
-Register a hook that is executed after @ref{classy:pre_kick/2} hooks allow the kick to proceed,
+Register a hook that is executed after @erlfn{ref,erlref,classy,pre_kick,2} hooks allow the kick to proceed,
 but before the membership change is applied and before the site left the cluster.
 
 This hook is executed only on the node that initiates the kick procedure.
@@ -782,7 +785,7 @@ Then side effects of this hook will be observed,
 but the site will stay in the cluster.
 As such, it's not recommended to perform any destructive actions here.
 
-Normally, such actions should be performed in @link{classy:on_membership_change/2}.
+Normally, such actions should be performed in @erlfn{ref,erlref,classy,on_membership_change,2}.
 """.
 -spec on_kick_decided(
         fun((cluster_id(), Target, kick_intent()) -> _),
@@ -851,7 +854,7 @@ run_level(Hook, Prio) ->
   classy_hook:insert(?on_change_run_level, Hook, Prio).
 
 -doc """
-Register a hook that can add entries to the map returned by @ref{classy:info/0}.
+Register a hook that can add entries to the map returned by @erlfn{ref,erlref,classy,info,0}.
 """.
 -spec enrich_site_info(
         fun((info()) -> info()),
@@ -935,7 +938,7 @@ Fallback: get list of peer nodes of a given node.
 
 When a classy-aware node joins to another node via the fallback mechanism,
 its peer information is seeded by running
-@ref{classy:fallback_get_site/1}, @ref{classy:fallback_get_cluster/1} and @ref{classy:fallback_get_meta/2}
+@erlfn{ref,erlref,classy,fallback_get_site,1}, @erlfn{ref,erlref,classy,fallback_get_cluster,1} and @erlfn{ref,erlref,classy,fallback_get_meta,2}
 hooks for each node returned by this hook,
 called with the node that is the target of @code{join_node} operation.
 
