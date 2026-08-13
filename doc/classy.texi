@@ -22,6 +22,8 @@ The document was typeset with
 @insertcopying
 @end titlepage
 
+@include anvl_erlang.texi
+
 @c Output the table of the contents at the beginning.
 @contents
 
@@ -49,10 +51,10 @@ The document was typeset with
   that can be used by 3rd party applications.
 
   @item @emph{Unique ID generation}:
-  @xref{api/classy/classy_uid, classy_uid}
+  @erlmodref{ref,classy_uid}
 
   @item @emph{Two-Phase Commit}:
-  @xref{api/classy/classy_vote, classy_vote}
+  @erlmodref{ref,classy_vote}
   @end itemize
 
 @node Introduction
@@ -65,8 +67,8 @@ The document was typeset with
   Each node creates this identifier once and then never changes it.
 
   By default, classy initializes site with a random value.
-  Business applications can override this behavior by registering @ref{classy:on_node_init/2} hook
-  containing a call to @ref{classy_node:maybe_init_the_site/1}:
+  Business applications can override this behavior by registering @erlfn{link,erlref,classy,on_node_init,2} hook
+  containing a call to @erlfn{link,erlref,classy_node,maybe_init_the_site,1}:
 
   @example erlang
   classy:on_node_init(
@@ -110,7 +112,7 @@ The document was typeset with
   (@code{erlang:halt}, @code{kill}, power loss),
   run levels always advance and retard in sequence.
 
-  Business applications can track the run level via @ref{classy:run_level/2} hook.
+  Business applications can track the run level via @erlfn{link,erlref,classy,run_level,2} hook.
   This hook can, for example,
   activate or deactivate some business applications.
 
@@ -129,7 +131,7 @@ The document was typeset with
   @cindex Peer discovery
   Autocluster is a mechanism for automatic peer discovery.
   Peer discovery is done with a help of several modules implementing
-  @ref{api/classy/classy_discovery_strategy, discovery_strategy} behavior.
+  @erlmodref{link,classy_discovery_strategy} behavior.
 
   The strategy is configured via @ref{discovery_strategy} OTP application environment variable.
   This variable has a form of 2-tuple with the following elements:
@@ -139,10 +141,10 @@ The document was typeset with
     @item Method-specific parameters
   @end enumerate
 
-  New methods can be registered using @ref{classy_discovery_strategy:hook/2} function.
+  New methods can be registered using @erlfn{ref,erlref,classy_discovery_strategy,hook,2} function.
 
   Additionally, there is a hook that allows to filter and prioritize discovered nodes:
-  @ref{classy:pre_autocluster/2}.
+  @erlfn{ref,erlref,classy,pre_autocluster,2}.
 
   Autocluster logic runs only on singleton sites.
   It is inactive on sites that already have peers (up or down).
@@ -153,7 +155,7 @@ The document was typeset with
   @section manual
     `Manual'' strategy disables automatic peer discovery.
     When it is selected,
-    the site simply waits until the operator manually calls @ref{classy:join_node/2}.
+    the site simply waits until the operator manually calls @erlfn{ref,erlref,classy,join_node,2}.
 
     Example configuration:
 
@@ -187,7 +189,7 @@ The document was typeset with
 
       Allowed values: @code{A}, @code{AAAA}, @code{SRV}.
       @item app
-      Node name prefix (default: @ref{classy_autocluster:app_name/0})
+      Node name prefix (default: @erlfn{ref,erlref,classy_autocluster,app_name,0})
     @end table
 
     Node names are derived using the following template @code{App@@Hostname},
@@ -218,7 +220,7 @@ The document was typeset with
       The name of the Kubernetes Service used for discovery.
 
       @item app_name
-      Type: string, default: @ref{classy_autocluster:app_name/0}.
+      Type: string, default: @erlfn{ref,erlref,classy_autocluster,app_name,0}.
 
       The application name used as a prefix for the generated node names.
 
@@ -277,7 +279,7 @@ The document was typeset with
 @end macro
 
   @section General
-    @defenv{setup_hooks, @ref{t:classy_lib:mfargs/0,mfargs()}}
+    @defenv{setup_hooks, @erltp{ref,erlref,classy_lib,mfargs,0}}
 
       A callback that classy executes during startup.
       It allows business applications to set up other hooks using a more type-safe API.
@@ -319,8 +321,7 @@ The document was typeset with
 
     @defen{n_sites, @code{pos_integer()}, 1}
 
-      Minimum number of known peers necessary to advance @ref{t:classy:run_level/0,run level}
-      from @code{single} to @code{cluster}.
+      Minimum number of known peers necessary to advance the run level from @code{single} to @code{cluster}.
 
     @defen{to_cluster_sets, @code{[classy:node_set_name()]}, @code{[]}}
 
@@ -334,8 +335,7 @@ The document was typeset with
 
     @defen{quorum, @code{pos_integer()}, 1}
 
-      Minimum number of known peers necessary to advance @ref{t:classy:run_level/0,run level}
-      from @code{cluster} to @code{quorum}.
+      Minimum number of known peers necessary to advance the run level from @code{cluster} to @code{quorum}.
 
   @section Two-phase commit
     @defen{vote_retry_interval, @code{pos_integer()}, 5000}
@@ -387,7 +387,7 @@ The document was typeset with
 
       Peer discovery retry interval.
 
-    @defenv{discovery_strategy, @ref{t:classy_discovery_strategy:t/0, classy_discovery_strategy:t/0}}
+    @defenv{discovery_strategy, @erltp{ref,erlref,classy_discovery_strategy,t,0}}
 
       Peer discovery method, @xref{Autocluster}.
 
@@ -399,7 +399,7 @@ The document was typeset with
 
 @node API Reference
 @chapter API Reference
-@include _anvl_build/doc/classy/app.texi
+@include _anvl_build/anvl_texinfo/gen_src/erlang/default/classy/app.texi
 
 @node Index
 @unnumbered Index

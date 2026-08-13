@@ -58,8 +58,8 @@ site_unique_tuple() ->
   {NRestarts, erlang:unique_integer([positive, monotonic])}.
 
 -doc """
-Return a tuple similar to @ref{classy_uid:site_unique_tuple/0},
-but also including site id,
+Return a tuple similar to @erlfn{ref,erlref,classy_uid,site_unique_tuple,0},
+but also including ID of the site that create it,
 which makes it unique within the cluster.
 
 Cluster-unique tuples can be used to order events on the originator site,
